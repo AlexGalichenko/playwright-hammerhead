@@ -163,14 +163,18 @@ test.describe('page.route', () => {
     });
 
     test('abort blocks the request with 503', async ({ safariPage: page }) => {
+        let handlerCalled = false;
+
         await page.route('**/api/blocked', async (route) => {
+            handlerCalled = true;
             await route.abort();
-        });
+        }, { debug: true });
 
         const status = await page.evaluate(() =>
             fetch('https://api.example.com/api/blocked').then(r => r.status)
         );
 
+        expect(handlerCalled).toBe(true);
         expect(status).toBe(503);
     });
 

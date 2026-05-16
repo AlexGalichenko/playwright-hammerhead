@@ -73,7 +73,11 @@ export class Route {
     async abort(_errorCode?: string): Promise<void> {
         if (this._handled) return;
         this._handled = true;
-        const mock = new ResponseMock('', 503, {});
+        const mock = new ResponseMock('', 503, {
+            'access-control-allow-origin': '*',
+            'access-control-allow-methods': '*',
+            'access-control-allow-headers': '*',
+        });
         await this.event.setMock(mock);
     }
 
