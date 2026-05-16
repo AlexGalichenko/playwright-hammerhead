@@ -1,9 +1,34 @@
-import { Proxy } from 'testcafe-hammerhead';
+import { Proxy, RequestFilterRule, RequestInfo } from 'testcafe-hammerhead';
 import { BridgeSession } from '../session/bridge-session';
 import { Locator } from './locator';
 import { Keyboard } from './keyboard';
 import { Mouse } from './mouse';
+import { Route, Request, FulfillOptions, ContinueOptions } from './route';
 import { openSafariAtUrl, closeSafariWindowByUrlFragment } from '../utils/safari';
+
+export type { FulfillOptions, ContinueOptions };
+
+export type RouteHandler = (route: Route, request: Request) => void | Promise<void>;
+export type UrlPattern = string | RegExp | ((url: string) => boolean);
+export interface RouteOptions { debug?: boolean; }
+
+function patternToRule(pattern: UrlPattern): RequestFilterRule {
+    if (typeof pattern === 'string') {
+        if (pattern.includes('*') || pattern.includes('?')) {
+            const regexStr = pattern
+                .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+                .replace(/\*\*/g, '.*')
+                .replace(/\*/g, '[^/]*')
+                .replace(/\?/g, '.');
+            return new RequestFilterRule(new RegExp(regexStr));
+        }
+        return new RequestFilterRule((info: RequestInfo) => info.url.includes(pattern));
+    }
+    if (pattern instanceof RegExp) {
+        return new RequestFilterRule(pattern);
+    }
+    return new RequestFilterRule((info: RequestInfo) => pattern(info.url));
+}
 
 export type WaitUntilState = 'domcontentloaded' | 'load' | 'networkidle';
 
@@ -17,11 +42,18 @@ export interface WaitForSelectorOptions {
     timeout?: number;
 }
 
+interface RouteEntry {
+    pattern: UrlPattern;
+    rule: RequestFilterRule;
+    handler: RouteHandler;
+}
+
 export class Page {
     readonly keyboard: Keyboard;
     readonly mouse: Mouse;
 
     private readonly defaultTimeout: number;
+    private readonly _routes: RouteEntry[] = [];
 
     constructor(
         private readonly proxy: Proxy,
@@ -195,6 +227,50 @@ export class Page {
 
     async evaluateHandle(fn: ((...args: unknown[]) => unknown) | string, ...args: unknown[]): Promise<unknown> {
         return this.evaluate(fn as (...args: unknown[]) => unknown, ...args);
+    }
+
+    // --- Routing ---
+
+    async route(pattern: UrlPattern, handler: RouteHandler, options?: RouteOptions): Promise<void> {
+        const rule = patternToRule(pattern);
+        const debug = options?.debug ?? false;
+
+        await this.session.requestHookEventProvider.addRequestEventListeners(
+            rule,
+            {
+                onRequest: async (event: import('testcafe-hammerhead').RequestEvent) => {
+                    const req = new Request(event._requestInfo);
+                    if (debug) {
+                        console.log(`[page.route] matched pattern=${String(pattern)} url=${req.url()} method=${req.method()}`);
+                    }
+                    const route = new Route(event, req);
+                    await handler(route, req);
+                },
+                onConfigureResponse: async () => {},
+                onResponse: async () => {},
+            },
+            (err) => { console.error('[page.route] handler error:', err.error); }
+        );
+
+        this._routes.push({ pattern, rule, handler });
+    }
+
+    async unroute(pattern?: UrlPattern, handler?: RouteHandler): Promise<void> {
+        if (pattern === undefined) {
+            for (const entry of this._routes) {
+                await this.session.requestHookEventProvider.removeRequestEventListeners(entry.rule);
+            }
+            this._routes.length = 0;
+            return;
+        }
+
+        const toRemove = this._routes.filter(
+            (e) => e.pattern === pattern && (handler === undefined || e.handler === handler)
+        );
+        for (const entry of toRemove) {
+            await this.session.requestHookEventProvider.removeRequestEventListeners(entry.rule);
+            this._routes.splice(this._routes.indexOf(entry), 1);
+        }
     }
 
     // --- Screenshot (no-op — cannot capture Safari screenshot from script) ---

@@ -1,4 +1,5 @@
 import { test, expect } from './fixtures';
+import type { Route } from '../src';
 
 test.describe('Saucedemo checkout flow', () => {
     test('completes full checkout as standard_user', async ({ safariPage: page }) => {
@@ -120,6 +121,184 @@ test.describe('Saucedemo inventory', () => {
         await page.click('#logout_sidebar_link');
 
         await expect(page.locator('#login-button')).toBeVisible();
+    });
+});
+
+test.describe('page.route', () => {
+    test.beforeEach(async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+        await expect(page.locator('#login-button')).toBeVisible({ timeout: 10000 });
+    });
+
+    test('fulfill returns custom JSON body', async ({ safariPage: page }) => {
+        let handlerCalled = false;
+
+        await page.route('**/api/products', async (route) => {
+            handlerCalled = true;
+            await route.fulfill({
+                status: 200,
+                contentType: 'application/json',
+                body: JSON.stringify([{ id: 1, name: 'Mocked Item' }]),
+            });
+        }, { debug: true });
+
+        const data = await page.evaluate(() =>
+            fetch('https://api.example.com/api/products').then(r => r.json())
+        );
+
+        expect(handlerCalled).toBe(true);
+        expect(data).toEqual([{ id: 1, name: 'Mocked Item' }]);
+    });
+
+    test('fulfill sets custom status code', async ({ safariPage: page }) => {
+        await page.route('**/api/missing', async (route) => {
+            await route.fulfill({ status: 404, body: 'Not Found' });
+        });
+
+        const status = await page.evaluate(() =>
+            fetch('https://api.example.com/api/missing').then(r => r.status)
+        );
+
+        expect(status).toBe(404);
+    });
+
+    test('abort blocks the request with 503', async ({ safariPage: page }) => {
+        await page.route('**/api/blocked', async (route) => {
+            await route.abort();
+        });
+
+        const status = await page.evaluate(() =>
+            fetch('https://api.example.com/api/blocked').then(r => r.status)
+        );
+
+        expect(status).toBe(503);
+    });
+
+    test('continue passes request through and handler is called', async ({ safariPage: page }) => {
+        let intercepted = false;
+
+        await page.route('**/api/passthrough', async (route) => {
+            intercepted = true;
+            await route.continue();
+        });
+
+        await page.evaluate(() =>
+            fetch('https://api.example.com/api/passthrough').catch(() => null)
+        );
+
+        expect(intercepted).toBe(true);
+    });
+
+    test('handler receives correct url and method from Request', async ({ safariPage: page }) => {
+        let capturedUrl = '';
+        let capturedMethod = '';
+
+        await page.route('**/api/info', async (route, request) => {
+            capturedUrl = request.url();
+            capturedMethod = request.method();
+            await route.fulfill({ status: 200, body: 'ok' });
+        });
+
+        await page.evaluate(() => fetch('https://api.example.com/api/info'));
+
+        expect(capturedUrl).toContain('/api/info');
+        expect(capturedMethod).toBe('get');
+    });
+
+    test('regex pattern matches request url', async ({ safariPage: page }) => {
+        let matched = false;
+
+        await page.route(/\/api\/v\d+\/users/, async (route) => {
+            matched = true;
+            await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+        });
+
+        await page.evaluate(() => fetch('https://api.example.com/api/v3/users'));
+
+        expect(matched).toBe(true);
+    });
+
+    test('function predicate matches request url', async ({ safariPage: page }) => {
+        let matched = false;
+
+        await page.route(
+            (url) => url.includes('/api/custom'),
+            async (route) => {
+                matched = true;
+                await route.fulfill({ status: 200, body: 'custom' });
+            }
+        );
+
+        await page.evaluate(() => fetch('https://api.example.com/api/custom/endpoint'));
+
+        expect(matched).toBe(true);
+    });
+
+    test('multiple routes each intercept their own url', async ({ safariPage: page }) => {
+        await page.route('**/api/users', async (route) => {
+            await route.fulfill({
+                status: 200,
+                contentType: 'application/json',
+                body: JSON.stringify(['Alice', 'Bob']),
+            });
+        });
+
+        await page.route('**/api/orders', async (route) => {
+            await route.fulfill({
+                status: 200,
+                contentType: 'application/json',
+                body: JSON.stringify([1, 2, 3]),
+            });
+        });
+
+        const [users, orders] = await page.evaluate(() =>
+            Promise.all([
+                fetch('https://api.example.com/api/users').then(r => r.json()),
+                fetch('https://api.example.com/api/orders').then(r => r.json()),
+            ])
+        );
+
+        expect(users).toEqual(['Alice', 'Bob']);
+        expect(orders).toEqual([1, 2, 3]);
+    });
+
+    test('unroute stops handler from being called', async ({ safariPage: page }) => {
+        let callCount = 0;
+
+        const handler = async (route: Route) => {
+            callCount++;
+            await route.fulfill({ status: 200, body: 'ok' });
+        };
+
+        await page.route('**/api/counted', handler);
+        await page.evaluate(() => fetch('https://api.example.com/api/counted'));
+
+        await page.unroute('**/api/counted', handler);
+        await page.evaluate(() =>
+            fetch('https://api.example.com/api/counted').catch(() => null)
+        );
+
+        expect(callCount).toBe(1);
+    });
+
+    test('unroute with no args removes all routes', async ({ safariPage: page }) => {
+        let aHit = false;
+        let bHit = false;
+
+        await page.route('**/api/a', async (route) => { aHit = true; await route.fulfill({ status: 200 }); });
+        await page.route('**/api/b', async (route) => { bHit = true; await route.fulfill({ status: 200 }); });
+
+        await page.unroute();
+
+        await page.evaluate(() =>
+            Promise.all([
+                fetch('https://api.example.com/api/a').catch(() => null),
+                fetch('https://api.example.com/api/b').catch(() => null),
+            ])
+        );
+
+        expect(aHit).toBe(false);
+        expect(bHit).toBe(false);
     });
 });
 
