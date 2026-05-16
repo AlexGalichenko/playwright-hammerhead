@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures';
-import type { Route } from '../src';
+import type { Route, ConsoleMessage, Dialog, Frame, FileChooser, WebSocketEvent, PageResponse } from '../src';
 
 test.describe('Saucedemo checkout flow', () => {
     test('completes full checkout as standard_user', async ({ safariPage: page }) => {
@@ -509,5 +509,257 @@ test.describe('page.addStyleTag', () => {
 
         expect(userNameVisible).toBe(false);
         expect(passwordVisible).toBe(true);
+    });
+});
+
+test.describe('page events', () => {
+    // ── close ──────────────────────────────────────────────────────────────
+
+    test('close fires when page.close() is called', async ({ safariBrowser }) => {
+        const page = await safariBrowser.newPage();
+        await page.goto('https://www.saucedemo.com/');
+
+        let fired = false;
+        page.once('close', () => { fired = true; });
+        await page.close();
+
+        expect(fired).toBe(true);
+    });
+
+    // ── console ────────────────────────────────────────────────────────────
+
+    test('console fires with correct type and text for console.log', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+
+        const msgPromise = new Promise<ConsoleMessage>(resolve => page.once('console', resolve));
+        await page.evaluate(() => console.log('hello events'));
+        const msg = await msgPromise;
+
+        expect(msg.type()).toBe('log');
+        expect(msg.text()).toBe('hello events');
+    });
+
+    test('console captures console.error with error type', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+
+        const msgPromise = new Promise<ConsoleMessage>(resolve => page.once('console', resolve));
+        await page.evaluate(() => console.error('something broke'));
+        const msg = await msgPromise;
+
+        expect(msg.type()).toBe('error');
+        expect(msg.text()).toContain('something broke');
+    });
+
+    // ── pageerror ──────────────────────────────────────────────────────────
+
+    test('pageerror fires for uncaught window error events', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+
+        const errPromise = new Promise<Error>(resolve => page.once('pageerror', resolve));
+        await page.evaluate(() =>
+            window.dispatchEvent(new ErrorEvent('error', { message: 'intentional test error' }))
+        );
+        const err = await errPromise;
+
+        expect(err.message).toBe('intentional test error');
+    });
+
+    // ── dialog ─────────────────────────────────────────────────────────────
+
+    test('dialog fires for window.alert with correct type and message', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+
+        const dialogPromise = new Promise<Dialog>(resolve => page.once('dialog', resolve));
+        await page.evaluate(() => window.alert('hello dialog'));
+        const dialog = await dialogPromise;
+
+        expect(dialog.type()).toBe('alert');
+        expect(dialog.message()).toBe('hello dialog');
+    });
+
+    test('dialog fires for window.confirm and returns true by default', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+
+        const dialogPromise = new Promise<Dialog>(resolve => page.once('dialog', resolve));
+        const result = await page.evaluate(() => window.confirm('Are you sure?'));
+        await dialogPromise;
+
+        expect(result).toBe(true);
+    });
+
+    test('dialog.dismiss() makes next confirm return false', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+
+        const first = new Promise<Dialog>(resolve => page.once('dialog', resolve));
+        await page.evaluate(() => window.confirm('first'));
+        await (await first).dismiss();
+
+        const result = await page.evaluate(() => window.confirm('second'));
+        expect(result).toBe(false);
+    });
+
+    test('dialog fires for window.prompt with message and defaultValue', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+
+        const dialogPromise = new Promise<Dialog>(resolve => page.once('dialog', resolve));
+        await page.evaluate(() => window.prompt('Enter name', 'default'));
+        const dialog = await dialogPromise;
+
+        expect(dialog.type()).toBe('prompt');
+        expect(dialog.message()).toBe('Enter name');
+        expect(dialog.defaultValue()).toBe('default');
+    });
+
+    // ── domcontentloaded / load ────────────────────────────────────────────
+
+    test('domcontentloaded fires during page.goto', async ({ safariPage: page }) => {
+        const dclPromise = new Promise<unknown>(resolve => page.once('domcontentloaded', resolve));
+        await page.goto('https://www.saucedemo.com/');
+        const arg = await dclPromise;
+
+        expect(arg).toBe(page);
+    });
+
+    test('load fires during page.goto', async ({ safariPage: page }) => {
+        const loadPromise = new Promise<unknown>(resolve => page.once('load', resolve));
+        await page.goto('https://www.saucedemo.com/');
+        const arg = await loadPromise;
+
+        expect(arg).toBe(page);
+    });
+
+    // ── popup ──────────────────────────────────────────────────────────────
+
+    test('popup fires with url and target when window.open is called', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+
+        const popupPromise = new Promise<{ url: string; target: string }>(resolve => page.once('popup', resolve));
+        await page.evaluate(() => window.open('https://example.com', '_blank'));
+        const info = await popupPromise;
+
+        expect(info.url).toContain('example.com');
+        expect(info.target).toBe('_blank');
+    });
+
+    // ── websocket ──────────────────────────────────────────────────────────
+
+    test('websocket fires with url when new WebSocket is created', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+
+        const wsPromise = new Promise<WebSocketEvent>(resolve => page.once('websocket', resolve));
+        await page.evaluate(() => {
+            try { new WebSocket('wss://localhost:1'); } catch (_) {}
+        });
+        const ws = await wsPromise;
+
+        expect(ws.url()).toContain('wss://localhost:1');
+    });
+
+    // ── filechooser ────────────────────────────────────────────────────────
+
+    test('filechooser fires when a file input is clicked', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+
+        await page.evaluate(() => {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.id = '__test_file_input';
+            input.accept = 'image/*';
+            document.body.appendChild(input);
+        });
+
+        const chooserPromise = new Promise<FileChooser>(resolve => page.once('filechooser', resolve));
+        await page.click('#__test_file_input');
+        const chooser = await chooserPromise;
+
+        expect(chooser.isMultiple()).toBe(false);
+        expect(chooser.accept()).toBe('image/*');
+    });
+
+    // ── frame events ───────────────────────────────────────────────────────
+
+    test('frameattached fires when an iframe is added to the DOM', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+
+        const framePromise = new Promise<Frame>(resolve => page.once('frameattached', resolve));
+        await page.evaluate(() => {
+            const iframe = document.createElement('iframe');
+            iframe.name = 'test-frame';
+            iframe.src = 'about:blank';
+            document.body.appendChild(iframe);
+        });
+        const frame = await framePromise;
+
+        expect(frame.name()).toBe('test-frame');
+    });
+
+    test('framedetached fires when an iframe is removed from the DOM', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+
+        await page.evaluate(() => {
+            const iframe = document.createElement('iframe');
+            iframe.id = '__detach_frame';
+            iframe.src = 'about:blank';
+            document.body.appendChild(iframe);
+        });
+        await page.waitForTimeout(200);
+
+        const detachPromise = new Promise<Frame>(resolve => page.once('framedetached', resolve));
+        await page.evaluate(() => {
+            const el = document.getElementById('__detach_frame');
+            el?.parentNode?.removeChild(el);
+        });
+        await detachPromise;
+    });
+
+    // ── request / response / requestfinished ───────────────────────────────
+
+    test('request fires for a page fetch', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+
+        await page.route('**/api/evt-req', async (route) => route.fulfill({ status: 200, body: 'ok' }));
+
+        const requestedUrls: string[] = [];
+        page.on('request', (req) => requestedUrls.push(req.url()));
+        await page.waitForTimeout(200);
+
+        await page.evaluate(() => fetch('https://api.example.com/api/evt-req'));
+        await page.waitForTimeout(500);
+
+        expect(requestedUrls.some(u => u.includes('/api/evt-req'))).toBe(true);
+    });
+
+    test('response fires after a fulfilled fetch with correct status', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+
+        await page.route('**/api/evt-resp', async (route) =>
+            route.fulfill({ status: 201, body: 'created' })
+        );
+
+        const responses: PageResponse[] = [];
+        page.on('response', (r) => responses.push(r));
+        await page.waitForTimeout(200);
+
+        await page.evaluate(() => fetch('https://api.example.com/api/evt-resp'));
+        await page.waitForTimeout(500);
+
+        const match = responses.find(r => r.url().includes('/api/evt-resp'));
+        expect(match).toBeTruthy();
+        expect(match!.status()).toBe(201);
+    });
+
+    test('requestfinished fires for a completed fetch', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+
+        await page.route('**/api/evt-fin', async (route) => route.fulfill({ status: 200, body: 'done' }));
+
+        const finishedUrls: string[] = [];
+        page.on('requestfinished', (req) => finishedUrls.push(req.url()));
+        await page.waitForTimeout(200);
+
+        await page.evaluate(() => fetch('https://api.example.com/api/evt-fin'));
+        await page.waitForTimeout(500);
+
+        expect(finishedUrls.some(u => u.includes('/api/evt-fin'))).toBe(true);
     });
 });

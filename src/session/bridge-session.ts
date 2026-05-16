@@ -8,7 +8,7 @@ export interface BridgeCommand {
     [key: string]: unknown;
 }
 
-type ServiceMsg = { sessionId?: string; cmd?: string; id?: string; result?: unknown; error?: string };
+type ServiceMsg = { sessionId?: string; cmd?: string; id?: string; result?: unknown; error?: string; event?: string; data?: unknown };
 
 export class BridgeSession extends Session {
     private commandQueue: BridgeCommand[] = [];
@@ -17,6 +17,7 @@ export class BridgeSession extends Session {
     private readyDeferred: Deferred<void> | null = null;
     private isReady = false;
     private _initScripts: string[] = [];
+    private _eventListener: ((event: string, data: unknown) => void) | null = null;
 
     readonly proxyPort: number;
 
@@ -27,6 +28,10 @@ export class BridgeSession extends Session {
 
     addInitScript(script: string): void {
         this._initScripts.push(script);
+    }
+
+    setEventListener(listener: (event: string, data: unknown) => void): void {
+        this._eventListener = listener;
     }
 
     async getPayloadScript(): Promise<string> {
@@ -59,6 +64,130 @@ export class BridgeSession extends Session {
             nativeSend.call(xhr, JSON.stringify(Object.assign({ sessionId: SESSION_ID, cmd: cmd }, extra || {})));
         });
     }
+
+    function sendEvent(name, data) {
+        sendMsg('bridge_event', { event: name, data: data || {} }, 3000).catch(function() {});
+    }
+
+    // --- Console ---
+    (function() {
+        var methods = ['log', 'warn', 'error', 'info', 'debug'];
+        methods.forEach(function(method) {
+            var orig = console[method].bind(console);
+            console[method] = function() {
+                var args = Array.prototype.slice.call(arguments).map(function(a) {
+                    try { return typeof a === 'object' ? JSON.stringify(a) : String(a); } catch(_) { return String(a); }
+                });
+                sendEvent('console', { type: method, args: args });
+                return orig.apply(console, arguments);
+            };
+        });
+    })();
+
+    // --- Page errors ---
+    window.addEventListener('error', function(e) {
+        sendEvent('pageerror', { message: e.message || String(e), filename: e.filename, lineno: e.lineno, colno: e.colno });
+    });
+    window.addEventListener('unhandledrejection', function(e) {
+        try { sendEvent('pageerror', { message: e.reason && e.reason.message ? e.reason.message : String(e.reason) }); } catch(_) {}
+    });
+
+    // --- Dialogs ---
+    window.__hhDialogDefaults = window.__hhDialogDefaults || { confirm: true, prompt: '' };
+    (function() {
+        var origAlert = window.alert;
+        window.alert = function(msg) {
+            sendEvent('dialog', { type: 'alert', message: String(msg == null ? '' : msg), defaultValue: '' });
+            return typeof origAlert === 'function' ? origAlert.call(window, msg) : undefined;
+        };
+        var origConfirm = window.confirm;
+        window.confirm = function(msg) {
+            var result = window.__hhDialogDefaults.confirm !== false;
+            sendEvent('dialog', { type: 'confirm', message: String(msg == null ? '' : msg), defaultValue: '' });
+            return result;
+        };
+        var origPrompt = window.prompt;
+        window.prompt = function(msg, def) {
+            var result = window.__hhDialogDefaults.prompt != null ? window.__hhDialogDefaults.prompt : (def != null ? String(def) : null);
+            sendEvent('dialog', { type: 'prompt', message: String(msg == null ? '' : msg), defaultValue: def != null ? String(def) : '' });
+            return result;
+        };
+    })();
+
+    // --- DOMContentLoaded / load ---
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', function() { sendEvent('domcontentloaded', {}); }, { once: true });
+    } else {
+        sendEvent('domcontentloaded', {});
+    }
+    if (document.readyState === 'complete') {
+        sendEvent('load', {});
+    } else {
+        window.addEventListener('load', function() { sendEvent('load', {}); }, { once: true });
+    }
+
+    // --- Popup ---
+    (function() {
+        var origOpen = window.open;
+        window.open = function(url, target, features) {
+            sendEvent('popup', { url: url ? String(url) : '', target: target ? String(target) : '' });
+            return typeof origOpen === 'function' ? origOpen.apply(window, arguments) : null;
+        };
+    })();
+
+    // --- Worker ---
+    if (typeof Worker !== 'undefined') {
+        (function() {
+            var OrigWorker = Worker;
+            function PatchedWorker(url, opts) { sendEvent('worker', { url: String(url) }); return new OrigWorker(url, opts); }
+            PatchedWorker.prototype = OrigWorker.prototype;
+            window.Worker = PatchedWorker;
+        })();
+    }
+
+    // --- WebSocket ---
+    if (typeof WebSocket !== 'undefined') {
+        (function() {
+            var OrigWS = WebSocket;
+            function PatchedWS(url, protocols) {
+                sendEvent('websocket', { url: String(url) });
+                return protocols != null ? new OrigWS(url, protocols) : new OrigWS(url);
+            }
+            PatchedWS.prototype = OrigWS.prototype;
+            PatchedWS.CONNECTING = OrigWS.CONNECTING;
+            PatchedWS.OPEN = OrigWS.OPEN;
+            PatchedWS.CLOSING = OrigWS.CLOSING;
+            PatchedWS.CLOSED = OrigWS.CLOSED;
+            window.WebSocket = PatchedWS;
+        })();
+    }
+
+    // --- FileChooser ---
+    document.addEventListener('click', function(e) {
+        var t = e.target || e.srcElement;
+        if (t && t.tagName === 'INPUT' && (t.type || '').toLowerCase() === 'file') {
+            sendEvent('filechooser', { multiple: !!t.multiple, accept: t.accept || '' });
+        }
+    }, true);
+
+    // --- Frame observation ---
+    (function() {
+        var obs = new MutationObserver(function(mutations) {
+            mutations.forEach(function(m) {
+                m.addedNodes.forEach(function(n) {
+                    if (n.tagName === 'IFRAME') sendEvent('frameattached', { url: n.src || '', name: n.name || '' });
+                });
+                m.removedNodes.forEach(function(n) {
+                    if (n.tagName === 'IFRAME') sendEvent('framedetached', { url: n.src || '', name: n.name || '' });
+                });
+            });
+        });
+        obs.observe(document.documentElement, { childList: true, subtree: true });
+        document.addEventListener('load', function(e) {
+            var t = e.target;
+            if (t && t.tagName === 'IFRAME') sendEvent('framenavigated', { url: t.src || '', name: t.name || '' });
+        }, true);
+    })();
 
     function waitForSelector(selector, timeoutMs) {
         timeoutMs = timeoutMs != null ? timeoutMs : 30000;
@@ -272,7 +401,9 @@ export class BridgeSession extends Session {
         return '';
     }
 
-    handleFileDownload(): void {}
+    handleFileDownload(): void {
+        if (this._eventListener) this._eventListener('download', { url: '', suggestedFilename: '' });
+    }
 
     getAuthCredentials(): null {
         return null;
@@ -283,6 +414,11 @@ export class BridgeSession extends Session {
     handlePageError(_ctx: unknown, _err: Error): void {}
 
     // Called by hammerhead's handleServiceMessage dispatcher via this[msg.cmd]
+    async bridge_event(msg: ServiceMsg): Promise<null> {
+        if (msg.event && this._eventListener) this._eventListener(msg.event, msg.data ?? {});
+        return null;
+    }
+
     async bridge_ready(_msg: ServiceMsg): Promise<null> {
         this.isReady = true;
         if (this.readyDeferred) {

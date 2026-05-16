@@ -1,10 +1,15 @@
 import { readFileSync } from 'fs';
-import { Proxy, RequestFilterRule, RequestInfo } from 'testcafe-hammerhead';
+import { EventEmitter } from 'events';
+import { Proxy, RequestFilterRule, RequestInfo, ResponseEvent } from 'testcafe-hammerhead';
 import { BridgeSession } from '../session/bridge-session';
 import { Locator } from './locator';
 import { Keyboard } from './keyboard';
 import { Mouse } from './mouse';
 import { Route, Request, FulfillOptions, ContinueOptions } from './route';
+import {
+    ConsoleMessage, Dialog, Download, Frame, FileChooser,
+    WebSocketEvent, WorkerEvent, PageResponse,
+} from './events';
 import { openSafariAtUrl, closeSafariWindowByUrlFragment } from '../utils/safari';
 
 export type { FulfillOptions, ContinueOptions };
@@ -56,28 +61,171 @@ export interface StyleTagOptions {
     content?: string;
 }
 
+const REQUEST_EVENTS = new Set(['request', 'response', 'requestfinished', 'requestfailed']);
+
 interface RouteEntry {
     pattern: UrlPattern;
     rule: RequestFilterRule;
     handler: RouteHandler;
 }
 
-export class Page {
+export class Page extends EventEmitter {
+    // --- Typed event overloads ---
+    on(event: 'close', listener: () => void): this;
+    on(event: 'console', listener: (msg: ConsoleMessage) => void): this;
+    on(event: 'crash', listener: () => void): this;
+    on(event: 'dialog', listener: (dialog: Dialog) => void): this;
+    on(event: 'domcontentloaded', listener: (page: Page) => void): this;
+    on(event: 'download', listener: (download: Download) => void): this;
+    on(event: 'filechooser', listener: (chooser: FileChooser) => void): this;
+    on(event: 'frameattached', listener: (frame: Frame) => void): this;
+    on(event: 'framedetached', listener: (frame: Frame) => void): this;
+    on(event: 'framenavigated', listener: (frame: Frame) => void): this;
+    on(event: 'load', listener: (page: Page) => void): this;
+    on(event: 'pageerror', listener: (error: Error) => void): this;
+    on(event: 'popup', listener: (info: { url: string; target: string }) => void): this;
+    on(event: 'request', listener: (request: Request) => void): this;
+    on(event: 'requestfailed', listener: (request: Request) => void): this;
+    on(event: 'requestfinished', listener: (request: Request) => void): this;
+    on(event: 'response', listener: (response: PageResponse) => void): this;
+    on(event: 'websocket', listener: (ws: WebSocketEvent) => void): this;
+    on(event: 'worker', listener: (worker: WorkerEvent) => void): this;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    on(event: string | symbol, listener: (...args: any[]) => void): this {
+        if (REQUEST_EVENTS.has(event as string) && !this._requestHookSetup) this._setupRequestHook();
+        return super.on(event, listener);
+    }
+
+    once(event: 'close', listener: () => void): this;
+    once(event: 'console', listener: (msg: ConsoleMessage) => void): this;
+    once(event: 'crash', listener: () => void): this;
+    once(event: 'dialog', listener: (dialog: Dialog) => void): this;
+    once(event: 'domcontentloaded', listener: (page: Page) => void): this;
+    once(event: 'download', listener: (download: Download) => void): this;
+    once(event: 'filechooser', listener: (chooser: FileChooser) => void): this;
+    once(event: 'frameattached', listener: (frame: Frame) => void): this;
+    once(event: 'framedetached', listener: (frame: Frame) => void): this;
+    once(event: 'framenavigated', listener: (frame: Frame) => void): this;
+    once(event: 'load', listener: (page: Page) => void): this;
+    once(event: 'pageerror', listener: (error: Error) => void): this;
+    once(event: 'popup', listener: (info: { url: string; target: string }) => void): this;
+    once(event: 'request', listener: (request: Request) => void): this;
+    once(event: 'requestfailed', listener: (request: Request) => void): this;
+    once(event: 'requestfinished', listener: (request: Request) => void): this;
+    once(event: 'response', listener: (response: PageResponse) => void): this;
+    once(event: 'websocket', listener: (ws: WebSocketEvent) => void): this;
+    once(event: 'worker', listener: (worker: WorkerEvent) => void): this;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    once(event: string | symbol, listener: (...args: any[]) => void): this {
+        if (REQUEST_EVENTS.has(event as string) && !this._requestHookSetup) this._setupRequestHook();
+        return super.once(event, listener);
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    off(event: string | symbol, listener: (...args: any[]) => void): this {
+        return super.off(event, listener);
+    }
+
     readonly keyboard: Keyboard;
     readonly mouse: Mouse;
 
     private readonly defaultTimeout: number;
     private readonly _routes: RouteEntry[] = [];
     private readonly _locatorHandlerIntervals: ReturnType<typeof setInterval>[] = [];
+    private readonly _requestInfoMap = new Map<string, RequestInfo>();
+    private _requestHookSetup = false;
 
     constructor(
         private readonly proxy: Proxy,
         private readonly session: BridgeSession,
         defaultTimeout = 30000
     ) {
+        super();
         this.defaultTimeout = defaultTimeout;
         this.keyboard = new Keyboard(session);
         this.mouse = new Mouse(session);
+        this.session.setEventListener((event, data) => this._handleBridgeEvent(event, data as Record<string, unknown>));
+    }
+
+    private _handleBridgeEvent(event: string, data: Record<string, unknown>): void {
+        switch (event) {
+            case 'console':
+                this.emit('console', new ConsoleMessage(data['type'] as string, data['args'] as string[]));
+                break;
+            case 'pageerror':
+                this.emit('pageerror', Object.assign(new Error(data['message'] as string), { filename: data['filename'], lineno: data['lineno'] }));
+                break;
+            case 'dialog':
+                this.emit('dialog', new Dialog(
+                    data['type'] as 'alert' | 'confirm' | 'prompt',
+                    data['message'] as string,
+                    data['defaultValue'] as string ?? '',
+                    this.session
+                ));
+                break;
+            case 'domcontentloaded':
+                this.emit('domcontentloaded', this);
+                break;
+            case 'load':
+                this.emit('load', this);
+                break;
+            case 'popup':
+                this.emit('popup', { url: data['url'] as string, target: data['target'] as string });
+                break;
+            case 'worker':
+                this.emit('worker', new WorkerEvent(data['url'] as string));
+                break;
+            case 'websocket':
+                this.emit('websocket', new WebSocketEvent(data['url'] as string));
+                break;
+            case 'filechooser':
+                this.emit('filechooser', new FileChooser(data['multiple'] as boolean, data['accept'] as string));
+                break;
+            case 'frameattached':
+                this.emit('frameattached', new Frame(data['url'] as string, data['name'] as string));
+                break;
+            case 'framedetached':
+                this.emit('framedetached', new Frame(data['url'] as string, data['name'] as string));
+                break;
+            case 'framenavigated':
+                this.emit('framenavigated', new Frame(data['url'] as string, data['name'] as string));
+                break;
+            case 'download':
+                this.emit('download', new Download(data['url'] as string, data['suggestedFilename'] as string ?? ''));
+                break;
+        }
+    }
+
+    private _setupRequestHook(): void {
+        this._requestHookSetup = true;
+        const catchAll = new RequestFilterRule(() => true);
+        this.session.requestHookEventProvider.addRequestEventListeners(
+            catchAll,
+            {
+                onRequest: async (event: import('testcafe-hammerhead').RequestEvent) => {
+                    const info = event._requestInfo;
+                    if (info.url.startsWith('http://localhost')) return;
+                    this._requestInfoMap.set(info.requestId, info);
+                    this.emit('request', new Request(info));
+                },
+                onConfigureResponse: async () => {},
+                onResponse: async (event: ResponseEvent) => {
+                    if (event.isSameOriginPolicyFailed) return;
+                    const info = this._requestInfoMap.get(event.requestId);
+                    if (!info || info.url.startsWith('http://localhost')) return;
+                    this._requestInfoMap.delete(event.requestId);
+                    const headers: Record<string, string | string[]> = {};
+                    if (event.headers) Object.assign(headers, event.headers);
+                    const response = new PageResponse(info.url, event.statusCode, headers, event.body ?? Buffer.alloc(0));
+                    this.emit('response', response);
+                    this.emit('requestfinished', new Request(info));
+                },
+            },
+            (err) => {
+                const info = err as unknown as { requestInfo?: RequestInfo };
+                if (info.requestInfo) this.emit('requestfailed', new Request(info.requestInfo));
+            }
+        ).catch(e => console.error('[page events] request hook setup failed:', e));
     }
 
     // --- Navigation ---
@@ -388,6 +536,8 @@ export class Page {
     async close(): Promise<void> {
         for (const interval of this._locatorHandlerIntervals) clearInterval(interval);
         this._locatorHandlerIntervals.length = 0;
+        this.emit('close');
+        this.removeAllListeners();
         this.proxy.closeSession(this.session);
         closeSafariWindowByUrlFragment(this.session.id);
     }

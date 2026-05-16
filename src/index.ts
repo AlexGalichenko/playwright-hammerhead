@@ -8,3 +8,4 @@ export { Locator, LocatorState } from './page/locator';
 export { Keyboard } from './page/keyboard';
 export { Mouse, MouseButton } from './page/mouse';
 export { BridgeSession } from './session/bridge-session';
+export { ConsoleMessage, Dialog, Download, Frame, FileChooser, WebSocketEvent, WorkerEvent, PageResponse } from './page/events';
