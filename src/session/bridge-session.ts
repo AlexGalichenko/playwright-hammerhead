@@ -18,6 +18,7 @@ export class BridgeSession extends Session {
     private isReady = false;
     private _initScripts: string[] = [];
     private _eventListener: ((event: string, data: unknown) => void) | null = null;
+    private _exposedFunctions = new Map<string, (...args: unknown[]) => unknown>();
 
     readonly proxyPort: number;
 
@@ -64,6 +65,8 @@ export class BridgeSession extends Session {
             nativeSend.call(xhr, JSON.stringify(Object.assign({ sessionId: SESSION_ID, cmd: cmd }, extra || {})));
         });
     }
+
+    window.__hhBridge = sendMsg;
 
     function sendEvent(name, data) {
         sendMsg('bridge_event', { event: name, data: data || {} }, 3000).catch(function() {});
@@ -189,13 +192,14 @@ export class BridgeSession extends Session {
         }, true);
     })();
 
-    function waitForSelector(selector, timeoutMs) {
+    function waitForSelector(selector, timeoutMs, nthOfAll) {
         timeoutMs = timeoutMs != null ? timeoutMs : 30000;
+        function findEl() { return nthOfAll !== undefined ? (document.querySelectorAll(selector)[nthOfAll] || null) : document.querySelector(selector); }
         return new Promise(function(resolve, reject) {
-            var el = document.querySelector(selector);
+            var el = findEl();
             if (el) { resolve(el); return; }
             var observer = new MutationObserver(function() {
-                var found = document.querySelector(selector);
+                var found = findEl();
                 if (found) { observer.disconnect(); clearTimeout(timer); resolve(found); }
             });
             observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true });
@@ -212,15 +216,15 @@ export class BridgeSession extends Session {
                 case 'evaluate':
                     return Promise.resolve().then(function() { return (function() { return eval(cmd.expression); })(); });
                 case 'click':
-                    return waitForSelector(cmd.selector, cmd.timeout).then(function(el) {
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
                         el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return null;
                     });
                 case 'dblclick':
-                    return waitForSelector(cmd.selector, cmd.timeout).then(function(el) {
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
                         el.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true })); return null;
                     });
                 case 'fill':
-                    return waitForSelector(cmd.selector, cmd.timeout).then(function(el) {
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
                         el.focus();
                         if ('value' in el) {
                             var nativeSetter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value');
@@ -232,7 +236,7 @@ export class BridgeSession extends Session {
                         return null;
                     });
                 case 'clear':
-                    return waitForSelector(cmd.selector, cmd.timeout).then(function(el) {
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
                         el.focus();
                         if ('value' in el) {
                             var nativeSetter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value');
@@ -244,7 +248,7 @@ export class BridgeSession extends Session {
                         return null;
                     });
                 case 'type':
-                    return waitForSelector(cmd.selector, cmd.timeout).then(function(el) {
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
                         el.focus();
                         var text = cmd.text;
                         var nativeSetter = 'value' in el
@@ -265,18 +269,18 @@ export class BridgeSession extends Session {
                         return null;
                     });
                 case 'textContent':
-                    return waitForSelector(cmd.selector, cmd.timeout).then(function(el) { return el.textContent; });
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) { return el.textContent; });
                 case 'innerText':
-                    return waitForSelector(cmd.selector, cmd.timeout).then(function(el) { return el.innerText; });
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) { return el.innerText; });
                 case 'innerHTML':
-                    return waitForSelector(cmd.selector, cmd.timeout).then(function(el) { return el.innerHTML; });
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) { return el.innerHTML; });
                 case 'inputValue':
-                    return waitForSelector(cmd.selector, cmd.timeout).then(function(el) { return el.value !== undefined ? el.value : null; });
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) { return el.value !== undefined ? el.value : null; });
                 case 'getAttribute':
-                    return waitForSelector(cmd.selector, cmd.timeout).then(function(el) { return el.getAttribute(cmd.name); });
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) { return el.getAttribute(cmd.name); });
                 case 'isVisible':
                     return Promise.resolve().then(function() {
-                        var el = document.querySelector(cmd.selector);
+                        var el = cmd.nthOfAll !== undefined ? document.querySelectorAll(cmd.selector)[cmd.nthOfAll] : document.querySelector(cmd.selector);
                         if (!el) return false;
                         var rect = el.getBoundingClientRect();
                         var style = window.getComputedStyle(el);
@@ -284,24 +288,24 @@ export class BridgeSession extends Session {
                     });
                 case 'isEnabled':
                     return Promise.resolve().then(function() {
-                        var el = document.querySelector(cmd.selector);
+                        var el = cmd.nthOfAll !== undefined ? document.querySelectorAll(cmd.selector)[cmd.nthOfAll] : document.querySelector(cmd.selector);
                         return el ? !el.disabled : false;
                     });
                 case 'isChecked':
                     return Promise.resolve().then(function() {
-                        var el = document.querySelector(cmd.selector);
+                        var el = cmd.nthOfAll !== undefined ? document.querySelectorAll(cmd.selector)[cmd.nthOfAll] : document.querySelector(cmd.selector);
                         return el ? !!el.checked : false;
                     });
                 case 'isEditable':
                     return Promise.resolve().then(function() {
-                        var el = document.querySelector(cmd.selector);
+                        var el = cmd.nthOfAll !== undefined ? document.querySelectorAll(cmd.selector)[cmd.nthOfAll] : document.querySelector(cmd.selector);
                         if (!el) return false;
                         return !el.disabled && !el.readOnly;
                     });
                 case 'count':
                     return Promise.resolve(document.querySelectorAll(cmd.selector).length);
                 case 'waitForSelector':
-                    return waitForSelector(cmd.selector, cmd.timeout).then(function() { return null; });
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function() { return null; });
                 case 'title':
                     return Promise.resolve(document.title);
                 case 'url':
@@ -309,17 +313,17 @@ export class BridgeSession extends Session {
                 case 'content':
                     return Promise.resolve(document.documentElement.outerHTML);
                 case 'hover':
-                    return waitForSelector(cmd.selector, cmd.timeout).then(function(el) {
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
                         el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
                         el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true, cancelable: false }));
                         return null;
                     });
                 case 'focus':
-                    return waitForSelector(cmd.selector, cmd.timeout).then(function(el) { el.focus(); return null; });
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) { el.focus(); return null; });
                 case 'blur':
-                    return waitForSelector(cmd.selector, cmd.timeout).then(function(el) { el.blur(); return null; });
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) { el.blur(); return null; });
                 case 'selectOption':
-                    return waitForSelector(cmd.selector, cmd.timeout).then(function(el) {
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
                         var values = Array.isArray(cmd.values) ? cmd.values : [cmd.values];
                         var selected = [];
                         Array.from(el.options).forEach(function(opt) {
@@ -330,15 +334,15 @@ export class BridgeSession extends Session {
                         return selected;
                     });
                 case 'check':
-                    return waitForSelector(cmd.selector, cmd.timeout).then(function(el) {
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
                         if (!el.checked) el.click(); return null;
                     });
                 case 'uncheck':
-                    return waitForSelector(cmd.selector, cmd.timeout).then(function(el) {
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
                         if (el.checked) el.click(); return null;
                     });
                 case 'scrollIntoView':
-                    return waitForSelector(cmd.selector, cmd.timeout).then(function(el) {
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
                         el.scrollIntoView({ behavior: 'smooth', block: 'center' }); return null;
                     });
                 case 'scrollTo':
@@ -358,8 +362,131 @@ export class BridgeSession extends Session {
                         if (el) el.click(); return null;
                     });
                 case 'locatorEvaluate':
-                    return waitForSelector(cmd.selector, cmd.timeout).then(function(el) {
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
                         return (new Function('element', 'args', 'return (' + cmd.fn + ')(element, args)'))(el, cmd.args);
+                    });
+                case 'press':
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
+                        el.focus();
+                        var init = { key: cmd.key, code: cmd.code || cmd.key, bubbles: true, cancelable: true };
+                        el.dispatchEvent(new KeyboardEvent('keydown', init));
+                        el.dispatchEvent(new KeyboardEvent('keypress', init));
+                        el.dispatchEvent(new KeyboardEvent('keyup', init));
+                        return null;
+                    });
+                case 'boundingBox':
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
+                        var r = el.getBoundingClientRect();
+                        return r.width === 0 && r.height === 0 ? null : { x: r.left, y: r.top, width: r.width, height: r.height };
+                    });
+                case 'setChecked':
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
+                        if (!!el.checked !== !!cmd.checked) el.click();
+                        return null;
+                    });
+                case 'dispatchEvent':
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
+                        var init = Object.assign({ bubbles: true, cancelable: true }, cmd.eventInit || {});
+                        el.dispatchEvent(new CustomEvent(cmd.eventType, init));
+                        return null;
+                    });
+                case 'allTextContents':
+                    return Promise.resolve().then(function() {
+                        var els = Array.from(document.querySelectorAll(cmd.selector));
+                        if (cmd.hasText !== undefined || cmd.hasNotText !== undefined) {
+                            els = els.filter(function(el) {
+                                var t = el.textContent || '';
+                                if (cmd.hasText !== undefined) {
+                                    if (typeof cmd.hasText === 'string') { if (t.indexOf(cmd.hasText) === -1) return false; }
+                                    else { if (!new RegExp(cmd.hasText.source, cmd.hasText.flags || '').test(t)) return false; }
+                                }
+                                if (cmd.hasNotText !== undefined) {
+                                    if (typeof cmd.hasNotText === 'string') { if (t.indexOf(cmd.hasNotText) !== -1) return false; }
+                                    else { if (new RegExp(cmd.hasNotText.source, cmd.hasNotText.flags || '').test(t)) return false; }
+                                }
+                                return true;
+                            });
+                        }
+                        return els.map(function(el) { return el.textContent || ''; });
+                    });
+                case 'allInnerTexts':
+                    return Promise.resolve().then(function() {
+                        var els = Array.from(document.querySelectorAll(cmd.selector));
+                        if (cmd.hasText !== undefined || cmd.hasNotText !== undefined) {
+                            els = els.filter(function(el) {
+                                var t = el.textContent || '';
+                                if (cmd.hasText !== undefined) {
+                                    if (typeof cmd.hasText === 'string') { if (t.indexOf(cmd.hasText) === -1) return false; }
+                                    else { if (!new RegExp(cmd.hasText.source, cmd.hasText.flags || '').test(t)) return false; }
+                                }
+                                if (cmd.hasNotText !== undefined) {
+                                    if (typeof cmd.hasNotText === 'string') { if (t.indexOf(cmd.hasNotText) !== -1) return false; }
+                                    else { if (new RegExp(cmd.hasNotText.source, cmd.hasNotText.flags || '').test(t)) return false; }
+                                }
+                                return true;
+                            });
+                        }
+                        return els.map(function(el) { return el.innerText || ''; });
+                    });
+                case 'evaluateAll':
+                    return Promise.resolve().then(function() {
+                        var els = Array.from(document.querySelectorAll(cmd.selector));
+                        if (cmd.hasText !== undefined || cmd.hasNotText !== undefined) {
+                            els = els.filter(function(el) {
+                                var t = el.textContent || '';
+                                if (cmd.hasText !== undefined) {
+                                    if (typeof cmd.hasText === 'string') { if (t.indexOf(cmd.hasText) === -1) return false; }
+                                    else { if (!new RegExp(cmd.hasText.source, cmd.hasText.flags || '').test(t)) return false; }
+                                }
+                                if (cmd.hasNotText !== undefined) {
+                                    if (typeof cmd.hasNotText === 'string') { if (t.indexOf(cmd.hasNotText) !== -1) return false; }
+                                    else { if (new RegExp(cmd.hasNotText.source, cmd.hasNotText.flags || '').test(t)) return false; }
+                                }
+                                return true;
+                            });
+                        }
+                        return (new Function('elements', 'args', 'return (' + cmd.fn + ')(elements, args)'))(els, cmd.args);
+                    });
+                case 'dragTo':
+                    return Promise.resolve().then(function() {
+                        var src = cmd.srcNth !== undefined ? document.querySelectorAll(cmd.srcSelector)[cmd.srcNth] : document.querySelector(cmd.srcSelector);
+                        var tgt = cmd.tgtNth !== undefined ? document.querySelectorAll(cmd.tgtSelector)[cmd.tgtNth] : document.querySelector(cmd.tgtSelector);
+                        if (!src) throw new Error('Drag source not found: ' + cmd.srcSelector);
+                        if (!tgt) throw new Error('Drag target not found: ' + cmd.tgtSelector);
+                        var sr = src.getBoundingClientRect(), tr = tgt.getBoundingClientRect();
+                        var sx = sr.left + sr.width / 2, sy = sr.top + sr.height / 2;
+                        var tx = tr.left + tr.width / 2, ty = tr.top + tr.height / 2;
+                        var dt = new DataTransfer();
+                        src.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, clientX: sx, clientY: sy }));
+                        src.dispatchEvent(new MouseEvent('mousedown',  { bubbles: true, cancelable: true, clientX: sx, clientY: sy }));
+                        src.dispatchEvent(new DragEvent('dragstart',   { bubbles: true, cancelable: true, dataTransfer: dt, clientX: sx, clientY: sy }));
+                        tgt.dispatchEvent(new DragEvent('dragenter',   { bubbles: true, cancelable: true, dataTransfer: dt, clientX: tx, clientY: ty }));
+                        tgt.dispatchEvent(new DragEvent('dragover',    { bubbles: true, cancelable: true, dataTransfer: dt, clientX: tx, clientY: ty }));
+                        document.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, cancelable: true, clientX: tx, clientY: ty }));
+                        document.dispatchEvent(new MouseEvent('mousemove',     { bubbles: true, cancelable: true, clientX: tx, clientY: ty }));
+                        tgt.dispatchEvent(new DragEvent('drop',        { bubbles: true, cancelable: true, dataTransfer: dt, clientX: tx, clientY: ty }));
+                        src.dispatchEvent(new DragEvent('dragend',     { bubbles: true, cancelable: true, dataTransfer: dt, clientX: tx, clientY: ty }));
+                        tgt.dispatchEvent(new PointerEvent('pointerup',{ bubbles: true, cancelable: true, clientX: tx, clientY: ty }));
+                        tgt.dispatchEvent(new MouseEvent('mouseup',    { bubbles: true, cancelable: true, clientX: tx, clientY: ty }));
+                        return null;
+                    });
+                case 'filterIndices':
+                    return Promise.resolve().then(function() {
+                        return Array.from(document.querySelectorAll(cmd.selector)).reduce(function(acc, el, i) {
+                            var t = el.textContent || '';
+                            if (cmd.hasText !== undefined) {
+                                if (typeof cmd.hasText === 'string') { if (t.indexOf(cmd.hasText) === -1) return acc; }
+                                else { if (!new RegExp(cmd.hasText.source, cmd.hasText.flags || '').test(t)) return acc; }
+                            }
+                            if (cmd.hasNotText !== undefined) {
+                                if (typeof cmd.hasNotText === 'string') { if (t.indexOf(cmd.hasNotText) !== -1) return acc; }
+                                else { if (new RegExp(cmd.hasNotText.source, cmd.hasNotText.flags || '').test(t)) return acc; }
+                            }
+                            if (cmd.hasSelector && !el.querySelector(cmd.hasSelector)) return acc;
+                            if (cmd.hasNotSelector && el.querySelector(cmd.hasNotSelector)) return acc;
+                            acc.push(i);
+                            return acc;
+                        }, []);
                     });
                 default:
                     return Promise.reject(new Error('Unknown command type: ' + cmd.type));
@@ -413,7 +540,24 @@ export class BridgeSession extends Session {
 
     handlePageError(_ctx: unknown, _err: Error): void {}
 
+    registerExposedFunction(name: string, fn: (...args: unknown[]) => unknown): void {
+        this._exposedFunctions.set(name, fn);
+    }
+
     // Called by hammerhead's handleServiceMessage dispatcher via this[msg.cmd]
+    async bridge_expose_call(msg: ServiceMsg): Promise<{ value?: unknown; error?: string }> {
+        const m = msg as Record<string, unknown>;
+        const name = m.expName as string | undefined ?? '';
+        const args = (m.args as unknown[]) ?? [];
+        const fn = this._exposedFunctions.get(name);
+        if (!fn) return { error: `No exposed function: ${name}` };
+        try {
+            return { value: await fn(...args) };
+        } catch (e) {
+            return { error: e instanceof Error ? e.message : String(e) };
+        }
+    }
+
     async bridge_event(msg: ServiceMsg): Promise<null> {
         if (msg.event && this._eventListener) this._eventListener(msg.event, msg.data ?? {});
         return null;

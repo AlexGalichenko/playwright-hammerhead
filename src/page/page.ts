@@ -11,22 +11,13 @@ import {
     WebSocketEvent, WorkerEvent, PageResponse,
 } from './events';
 import { openSafariAtUrl, closeSafariWindowByUrlFragment } from '../utils/safari';
+import { getModernScreenshotCode } from '../utils/screenshot';
 
 export type { FulfillOptions, ContinueOptions };
 
 export type RouteHandler = (route: Route, request: Request) => void | Promise<void>;
 export type UrlPattern = string | RegExp | ((url: string) => boolean);
 export interface RouteOptions { debug?: boolean; }
-
-let _modernScreenshotCodeCache: string | null = null;
-function _getModernScreenshotCode(): string {
-    if (!_modernScreenshotCodeCache) {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const libPath: string = require.resolve('modern-screenshot/dist/index.js');
-        _modernScreenshotCodeCache = readFileSync(libPath, 'utf-8');
-    }
-    return _modernScreenshotCodeCache;
-}
 
 function patternToRule(pattern: UrlPattern): RequestFilterRule {
     if (typeof pattern === 'string') {
@@ -146,7 +137,7 @@ export class Page extends EventEmitter {
     readonly keyboard: Keyboard;
     readonly mouse: Mouse;
 
-    private readonly defaultTimeout: number;
+    private defaultTimeout: number;
     private readonly _routes: RouteEntry[] = [];
     private readonly _locatorHandlerIntervals: ReturnType<typeof setInterval>[] = [];
     private readonly _requestInfoMap = new Map<string, RequestInfo>();
@@ -243,6 +234,10 @@ export class Page extends EventEmitter {
                 if (info.requestInfo) this.emit('requestfailed', new Request(info.requestInfo));
             }
         ).catch(e => console.error('[page events] request hook setup failed:', e));
+    }
+
+    setDefaultTimeout(ms: number): void {
+        this.defaultTimeout = ms;
     }
 
     // --- Navigation ---
@@ -409,6 +404,51 @@ export class Page extends EventEmitter {
         return this.evaluate(fn as (...args: unknown[]) => unknown, ...args);
     }
 
+    async dispatchEvent(selector: string, type: string, eventInit?: Record<string, unknown>, options?: { timeout?: number }): Promise<void> {
+        await this.locator(selector).dispatchEvent(type, eventInit, options);
+    }
+
+    async dragAndDrop(source: string, target: string, options?: { timeout?: number }): Promise<void> {
+        await this.locator(source).dragTo(this.locator(target), options);
+    }
+
+    async exposeFunction(name: string, fn: (...args: unknown[]) => unknown): Promise<void> {
+        this.session.registerExposedFunction(name, fn);
+        const wrapper = `(function() {
+            window[${JSON.stringify(name)}] = function() {
+                var args = Array.prototype.slice.call(arguments);
+                return window.__hhBridge('bridge_expose_call', { expName: ${JSON.stringify(name)}, args: args }, 30000)
+                    .then(function(r) { return r && 'value' in r ? r.value : undefined; });
+            };
+        })()`;
+        await this.addInitScript(wrapper);
+        await this.evaluate(wrapper).catch(() => {});
+    }
+
+    async setExtraHTTPHeaders(headers: Record<string, string>): Promise<void> {
+        const script = `(function() {
+            var extra = ${JSON.stringify(headers)};
+            var OrigOpen = XMLHttpRequest.prototype.open;
+            XMLHttpRequest.prototype.open = function() { this.__hhExtra = extra; return OrigOpen.apply(this, arguments); };
+            var OrigSend = XMLHttpRequest.prototype.send;
+            XMLHttpRequest.prototype.send = function() {
+                var self = this;
+                if (self.__hhExtra) Object.keys(self.__hhExtra).forEach(function(k) { self.setRequestHeader(k, self.__hhExtra[k]); });
+                return OrigSend.apply(self, arguments);
+            };
+            if (typeof window.fetch === 'function') {
+                var OrigFetch = window.fetch;
+                window.fetch = function(input, init) {
+                    init = Object.assign({}, init);
+                    init.headers = Object.assign({}, extra, init.headers || {});
+                    return OrigFetch.call(window, input, init);
+                };
+            }
+        })()`;
+        await this.addInitScript(script);
+        await this.evaluate(script).catch(() => {});
+    }
+
     // --- Routing ---
 
     async route(pattern: UrlPattern, handler: RouteHandler, options?: RouteOptions): Promise<void> {
@@ -539,7 +579,7 @@ export class Page extends EventEmitter {
     // --- Screenshot via modern-screenshot ---
 
     async screenshot(options?: ScreenshotOptions): Promise<Buffer> {
-        const libCode = _getModernScreenshotCode();
+        const libCode = getModernScreenshotCode();
         const isJpeg = options?.type === 'jpeg';
         const quality = options?.quality ?? (isJpeg ? 0.92 : 1);
         const msType = isJpeg ? 'image/jpeg' : 'image/png';
