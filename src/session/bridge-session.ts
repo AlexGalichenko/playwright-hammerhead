@@ -35,13 +35,12 @@ export class BridgeSession extends Session {
         this._eventListener = listener;
     }
 
-    async getPayloadScript(): Promise<string> {
-        const sessionId = this.id;
-        const messagingUrl = `http://localhost:${this.proxyPort}/messaging`;
-        const initBlock = this._initScripts.length > 0
-            ? this._initScripts.map(s => `try { (function(){ ${s} })(); } catch(e) { console.error('[initScript]', e); }`).join('\n') + '\n'
-            : '';
-        return `${initBlock}(function() {
+    // -------------------------------------------------------------------------
+    // Browser payload script generation
+    // -------------------------------------------------------------------------
+
+    private _setupVars(sessionId: string, messagingUrl: string): string {
+        return `
     var SESSION_ID = '${sessionId}';
     var MESSAGING_URL = '${messagingUrl}';
     var _hh = window['%hammerhead%'];
@@ -70,9 +69,11 @@ export class BridgeSession extends Session {
 
     function sendEvent(name, data) {
         sendMsg('bridge_event', { event: name, data: data || {} }, 3000).catch(function() {});
+    }`;
     }
 
-    // --- Console ---
+    private _consoleForwarder(): string {
+        return `
     (function() {
         var methods = ['log', 'warn', 'error', 'info', 'debug'];
         methods.forEach(function(method) {
@@ -85,17 +86,21 @@ export class BridgeSession extends Session {
                 return orig.apply(console, arguments);
             };
         });
-    })();
+    })();`;
+    }
 
-    // --- Page errors ---
+    private _errorForwarder(): string {
+        return `
     window.addEventListener('error', function(e) {
         sendEvent('pageerror', { message: e.message || String(e), filename: e.filename, lineno: e.lineno, colno: e.colno });
     });
     window.addEventListener('unhandledrejection', function(e) {
         try { sendEvent('pageerror', { message: e.reason && e.reason.message ? e.reason.message : String(e.reason) }); } catch(_) {}
-    });
+    });`;
+    }
 
-    // --- Dialogs ---
+    private _dialogForwarder(): string {
+        return `
     window.__hhDialogDefaults = window.__hhDialogDefaults || { confirm: true, prompt: '' };
     (function() {
         var origAlert = window.alert;
@@ -115,9 +120,11 @@ export class BridgeSession extends Session {
             sendEvent('dialog', { type: 'prompt', message: String(msg == null ? '' : msg), defaultValue: def != null ? String(def) : '' });
             return result;
         };
-    })();
+    })();`;
+    }
 
-    // --- DOMContentLoaded / load ---
+    private _lifecycleForwarder(): string {
+        return `
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', function() { sendEvent('domcontentloaded', {}); }, { once: true });
     } else {
@@ -127,18 +134,22 @@ export class BridgeSession extends Session {
         sendEvent('load', {});
     } else {
         window.addEventListener('load', function() { sendEvent('load', {}); }, { once: true });
+    }`;
     }
 
-    // --- Popup ---
+    private _popupForwarder(): string {
+        return `
     (function() {
         var origOpen = window.open;
         window.open = function(url, target, features) {
             sendEvent('popup', { url: url ? String(url) : '', target: target ? String(target) : '' });
             return typeof origOpen === 'function' ? origOpen.apply(window, arguments) : null;
         };
-    })();
+    })();`;
+    }
 
-    // --- Worker ---
+    private _workerForwarder(): string {
+        return `
     if (typeof Worker !== 'undefined') {
         (function() {
             var OrigWorker = Worker;
@@ -146,9 +157,11 @@ export class BridgeSession extends Session {
             PatchedWorker.prototype = OrigWorker.prototype;
             window.Worker = PatchedWorker;
         })();
+    }`;
     }
 
-    // --- WebSocket ---
+    private _webSocketForwarder(): string {
+        return `
     if (typeof WebSocket !== 'undefined') {
         (function() {
             var OrigWS = WebSocket;
@@ -163,17 +176,21 @@ export class BridgeSession extends Session {
             PatchedWS.CLOSED = OrigWS.CLOSED;
             window.WebSocket = PatchedWS;
         })();
+    }`;
     }
 
-    // --- FileChooser ---
+    private _fileChooserForwarder(): string {
+        return `
     document.addEventListener('click', function(e) {
         var t = e.target || e.srcElement;
         if (t && t.tagName === 'INPUT' && (t.type || '').toLowerCase() === 'file') {
             sendEvent('filechooser', { multiple: !!t.multiple, accept: t.accept || '' });
         }
-    }, true);
+    }, true);`;
+    }
 
-    // --- Frame observation ---
+    private _frameForwarder(): string {
+        return `
     (function() {
         var obs = new MutationObserver(function(mutations) {
             mutations.forEach(function(m) {
@@ -190,8 +207,11 @@ export class BridgeSession extends Session {
             var t = e.target;
             if (t && t.tagName === 'IFRAME') sendEvent('framenavigated', { url: t.src || '', name: t.name || '' });
         }, true);
-    })();
+    })();`;
+    }
 
+    private _domHelperFns(): string {
+        return `
     function waitForSelector(selector, timeoutMs, nthOfAll) {
         timeoutMs = timeoutMs != null ? timeoutMs : 30000;
         function findEl() { return nthOfAll !== undefined ? (document.querySelectorAll(selector)[nthOfAll] || null) : document.querySelector(selector); }
@@ -210,11 +230,36 @@ export class BridgeSession extends Session {
         });
     }
 
+    // Returns [{el, idx}] — idx is position in the original querySelectorAll result.
+    // When hasText/hasNotText are both undefined, all elements pass through.
+    function applyTextFilter(els, hasText, hasNotText) {
+        return els.reduce(function(acc, el, i) {
+            var t = el.textContent || '';
+            if (hasText !== undefined) {
+                if (typeof hasText === 'string') { if (t.indexOf(hasText) === -1) return acc; }
+                else { if (!new RegExp(hasText.source, hasText.flags || '').test(t)) return acc; }
+            }
+            if (hasNotText !== undefined) {
+                if (typeof hasNotText === 'string') { if (t.indexOf(hasNotText) !== -1) return acc; }
+                else { if (new RegExp(hasNotText.source, hasNotText.flags || '').test(t)) return acc; }
+            }
+            acc.push({ el: el, idx: i });
+            return acc;
+        }, []);
+    }`;
+    }
+
+    private _executeCommandFn(): string {
+        return `
     function executeCommand(cmd) {
         try {
             switch (cmd.type) {
+
+                // --- Evaluate ---
                 case 'evaluate':
                     return Promise.resolve().then(function() { return (function() { return eval(cmd.expression); })(); });
+
+                // --- Single-element writes ---
                 case 'click':
                     return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
                         el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return null;
@@ -251,9 +296,7 @@ export class BridgeSession extends Session {
                     return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
                         el.focus();
                         var text = cmd.text;
-                        var nativeSetter = 'value' in el
-                            ? Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value')
-                            : null;
+                        var nativeSetter = 'value' in el ? Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value') : null;
                         for (var i = 0; i < text.length; i++) {
                             var ch = text[i];
                             el.dispatchEvent(new KeyboardEvent('keydown', { key: ch, bubbles: true, cancelable: true }));
@@ -268,6 +311,59 @@ export class BridgeSession extends Session {
                         }
                         return null;
                     });
+                case 'press':
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
+                        el.focus();
+                        var init = { key: cmd.key, code: cmd.code || cmd.key, bubbles: true, cancelable: true };
+                        el.dispatchEvent(new KeyboardEvent('keydown', init));
+                        el.dispatchEvent(new KeyboardEvent('keypress', init));
+                        el.dispatchEvent(new KeyboardEvent('keyup', init));
+                        return null;
+                    });
+                case 'hover':
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
+                        el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+                        el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true, cancelable: false }));
+                        return null;
+                    });
+                case 'focus':
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) { el.focus(); return null; });
+                case 'blur':
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) { el.blur(); return null; });
+                case 'check':
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
+                        if (!el.checked) el.click(); return null;
+                    });
+                case 'uncheck':
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
+                        if (el.checked) el.click(); return null;
+                    });
+                case 'setChecked':
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
+                        if (!!el.checked !== !!cmd.checked) el.click(); return null;
+                    });
+                case 'selectOption':
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
+                        var values = Array.isArray(cmd.values) ? cmd.values : [cmd.values];
+                        var selected = [];
+                        Array.from(el.options).forEach(function(opt) {
+                            opt.selected = values.indexOf(opt.value) !== -1 || values.indexOf(opt.text) !== -1;
+                            if (opt.selected) selected.push(opt.value);
+                        });
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                        return selected;
+                    });
+                case 'scrollIntoView':
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
+                        el.scrollIntoView({ behavior: 'smooth', block: 'center' }); return null;
+                    });
+                case 'dispatchEvent':
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
+                        var init = Object.assign({ bubbles: true, cancelable: true }, cmd.eventInit || {});
+                        el.dispatchEvent(new CustomEvent(cmd.eventType, init)); return null;
+                    });
+
+                // --- Single-element reads ---
                 case 'textContent':
                     return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) { return el.textContent; });
                 case 'innerText':
@@ -278,12 +374,22 @@ export class BridgeSession extends Session {
                     return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) { return el.value !== undefined ? el.value : null; });
                 case 'getAttribute':
                     return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) { return el.getAttribute(cmd.name); });
+                case 'boundingBox':
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
+                        var r = el.getBoundingClientRect();
+                        return r.width === 0 && r.height === 0 ? null : { x: r.left, y: r.top, width: r.width, height: r.height };
+                    });
+                case 'locatorEvaluate':
+                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
+                        return (new Function('element', 'args', 'return (' + cmd.fn + ')(element, args)'))(el, cmd.args);
+                    });
+
+                // --- State queries ---
                 case 'isVisible':
                     return Promise.resolve().then(function() {
                         var el = cmd.nthOfAll !== undefined ? document.querySelectorAll(cmd.selector)[cmd.nthOfAll] : document.querySelector(cmd.selector);
                         if (!el) return false;
-                        var rect = el.getBoundingClientRect();
-                        var style = window.getComputedStyle(el);
+                        var rect = el.getBoundingClientRect(), style = window.getComputedStyle(el);
                         return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none' && style.opacity !== '0';
                     });
                 case 'isEnabled':
@@ -302,51 +408,18 @@ export class BridgeSession extends Session {
                         if (!el) return false;
                         return !el.disabled && !el.readOnly;
                     });
-                case 'count':
-                    return Promise.resolve(document.querySelectorAll(cmd.selector).length);
+
+                // --- Page info / navigation ---
+                case 'title':    return Promise.resolve(document.title);
+                case 'url':      return Promise.resolve(location.href);
+                case 'content':  return Promise.resolve(document.documentElement.outerHTML);
+                case 'count':    return Promise.resolve(document.querySelectorAll(cmd.selector).length);
                 case 'waitForSelector':
                     return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function() { return null; });
-                case 'title':
-                    return Promise.resolve(document.title);
-                case 'url':
-                    return Promise.resolve(location.href);
-                case 'content':
-                    return Promise.resolve(document.documentElement.outerHTML);
-                case 'hover':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
-                        el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-                        el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true, cancelable: false }));
-                        return null;
-                    });
-                case 'focus':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) { el.focus(); return null; });
-                case 'blur':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) { el.blur(); return null; });
-                case 'selectOption':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
-                        var values = Array.isArray(cmd.values) ? cmd.values : [cmd.values];
-                        var selected = [];
-                        Array.from(el.options).forEach(function(opt) {
-                            opt.selected = values.indexOf(opt.value) !== -1 || values.indexOf(opt.text) !== -1;
-                            if (opt.selected) selected.push(opt.value);
-                        });
-                        el.dispatchEvent(new Event('change', { bubbles: true }));
-                        return selected;
-                    });
-                case 'check':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
-                        if (!el.checked) el.click(); return null;
-                    });
-                case 'uncheck':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
-                        if (el.checked) el.click(); return null;
-                    });
-                case 'scrollIntoView':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
-                        el.scrollIntoView({ behavior: 'smooth', block: 'center' }); return null;
-                    });
                 case 'scrollTo':
                     return Promise.resolve().then(function() { window.scrollTo(cmd.x || 0, cmd.y || 0); return null; });
+
+                // --- Global keyboard / mouse ---
                 case 'keyPress':
                     return Promise.resolve().then(function() {
                         var target = document.activeElement || document.body;
@@ -361,92 +434,36 @@ export class BridgeSession extends Session {
                         var el = document.elementFromPoint(cmd.x, cmd.y);
                         if (el) el.click(); return null;
                     });
-                case 'locatorEvaluate':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
-                        return (new Function('element', 'args', 'return (' + cmd.fn + ')(element, args)'))(el, cmd.args);
-                    });
-                case 'press':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
-                        el.focus();
-                        var init = { key: cmd.key, code: cmd.code || cmd.key, bubbles: true, cancelable: true };
-                        el.dispatchEvent(new KeyboardEvent('keydown', init));
-                        el.dispatchEvent(new KeyboardEvent('keypress', init));
-                        el.dispatchEvent(new KeyboardEvent('keyup', init));
-                        return null;
-                    });
-                case 'boundingBox':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
-                        var r = el.getBoundingClientRect();
-                        return r.width === 0 && r.height === 0 ? null : { x: r.left, y: r.top, width: r.width, height: r.height };
-                    });
-                case 'setChecked':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
-                        if (!!el.checked !== !!cmd.checked) el.click();
-                        return null;
-                    });
-                case 'dispatchEvent':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
-                        var init = Object.assign({ bubbles: true, cancelable: true }, cmd.eventInit || {});
-                        el.dispatchEvent(new CustomEvent(cmd.eventType, init));
-                        return null;
-                    });
+
+                // --- Multi-element reads ---
                 case 'allTextContents':
                     return Promise.resolve().then(function() {
-                        var els = Array.from(document.querySelectorAll(cmd.selector));
-                        if (cmd.hasText !== undefined || cmd.hasNotText !== undefined) {
-                            els = els.filter(function(el) {
-                                var t = el.textContent || '';
-                                if (cmd.hasText !== undefined) {
-                                    if (typeof cmd.hasText === 'string') { if (t.indexOf(cmd.hasText) === -1) return false; }
-                                    else { if (!new RegExp(cmd.hasText.source, cmd.hasText.flags || '').test(t)) return false; }
-                                }
-                                if (cmd.hasNotText !== undefined) {
-                                    if (typeof cmd.hasNotText === 'string') { if (t.indexOf(cmd.hasNotText) !== -1) return false; }
-                                    else { if (new RegExp(cmd.hasNotText.source, cmd.hasNotText.flags || '').test(t)) return false; }
-                                }
-                                return true;
-                            });
-                        }
-                        return els.map(function(el) { return el.textContent || ''; });
+                        return applyTextFilter(Array.from(document.querySelectorAll(cmd.selector)), cmd.hasText, cmd.hasNotText)
+                            .map(function(x) { return x.el.textContent || ''; });
                     });
                 case 'allInnerTexts':
                     return Promise.resolve().then(function() {
-                        var els = Array.from(document.querySelectorAll(cmd.selector));
-                        if (cmd.hasText !== undefined || cmd.hasNotText !== undefined) {
-                            els = els.filter(function(el) {
-                                var t = el.textContent || '';
-                                if (cmd.hasText !== undefined) {
-                                    if (typeof cmd.hasText === 'string') { if (t.indexOf(cmd.hasText) === -1) return false; }
-                                    else { if (!new RegExp(cmd.hasText.source, cmd.hasText.flags || '').test(t)) return false; }
-                                }
-                                if (cmd.hasNotText !== undefined) {
-                                    if (typeof cmd.hasNotText === 'string') { if (t.indexOf(cmd.hasNotText) !== -1) return false; }
-                                    else { if (new RegExp(cmd.hasNotText.source, cmd.hasNotText.flags || '').test(t)) return false; }
-                                }
-                                return true;
-                            });
-                        }
-                        return els.map(function(el) { return el.innerText || ''; });
+                        return applyTextFilter(Array.from(document.querySelectorAll(cmd.selector)), cmd.hasText, cmd.hasNotText)
+                            .map(function(x) { return x.el.innerText || ''; });
                     });
                 case 'evaluateAll':
                     return Promise.resolve().then(function() {
-                        var els = Array.from(document.querySelectorAll(cmd.selector));
-                        if (cmd.hasText !== undefined || cmd.hasNotText !== undefined) {
-                            els = els.filter(function(el) {
-                                var t = el.textContent || '';
-                                if (cmd.hasText !== undefined) {
-                                    if (typeof cmd.hasText === 'string') { if (t.indexOf(cmd.hasText) === -1) return false; }
-                                    else { if (!new RegExp(cmd.hasText.source, cmd.hasText.flags || '').test(t)) return false; }
-                                }
-                                if (cmd.hasNotText !== undefined) {
-                                    if (typeof cmd.hasNotText === 'string') { if (t.indexOf(cmd.hasNotText) !== -1) return false; }
-                                    else { if (new RegExp(cmd.hasNotText.source, cmd.hasNotText.flags || '').test(t)) return false; }
-                                }
-                                return true;
-                            });
-                        }
+                        var els = applyTextFilter(Array.from(document.querySelectorAll(cmd.selector)), cmd.hasText, cmd.hasNotText)
+                            .map(function(x) { return x.el; });
                         return (new Function('elements', 'args', 'return (' + cmd.fn + ')(elements, args)'))(els, cmd.args);
                     });
+                case 'filterIndices':
+                    return Promise.resolve().then(function() {
+                        return applyTextFilter(Array.from(document.querySelectorAll(cmd.selector)), cmd.hasText, cmd.hasNotText)
+                            .filter(function(x) {
+                                if (cmd.hasSelector && !x.el.querySelector(cmd.hasSelector)) return false;
+                                if (cmd.hasNotSelector && x.el.querySelector(cmd.hasNotSelector)) return false;
+                                return true;
+                            })
+                            .map(function(x) { return x.idx; });
+                    });
+
+                // --- Drag ---
                 case 'dragTo':
                     return Promise.resolve().then(function() {
                         var src = cmd.srcNth !== undefined ? document.querySelectorAll(cmd.srcSelector)[cmd.srcNth] : document.querySelector(cmd.srcSelector);
@@ -470,32 +487,18 @@ export class BridgeSession extends Session {
                         tgt.dispatchEvent(new MouseEvent('mouseup',    { bubbles: true, cancelable: true, clientX: tx, clientY: ty }));
                         return null;
                     });
-                case 'filterIndices':
-                    return Promise.resolve().then(function() {
-                        return Array.from(document.querySelectorAll(cmd.selector)).reduce(function(acc, el, i) {
-                            var t = el.textContent || '';
-                            if (cmd.hasText !== undefined) {
-                                if (typeof cmd.hasText === 'string') { if (t.indexOf(cmd.hasText) === -1) return acc; }
-                                else { if (!new RegExp(cmd.hasText.source, cmd.hasText.flags || '').test(t)) return acc; }
-                            }
-                            if (cmd.hasNotText !== undefined) {
-                                if (typeof cmd.hasNotText === 'string') { if (t.indexOf(cmd.hasNotText) !== -1) return acc; }
-                                else { if (new RegExp(cmd.hasNotText.source, cmd.hasNotText.flags || '').test(t)) return acc; }
-                            }
-                            if (cmd.hasSelector && !el.querySelector(cmd.hasSelector)) return acc;
-                            if (cmd.hasNotSelector && el.querySelector(cmd.hasNotSelector)) return acc;
-                            acc.push(i);
-                            return acc;
-                        }, []);
-                    });
+
                 default:
                     return Promise.reject(new Error('Unknown command type: ' + cmd.type));
             }
         } catch(e) {
             return Promise.reject(e);
         }
+    }`;
     }
 
+    private _pollFn(): string {
+        return `
     function signalReady() {
         sendMsg('bridge_ready', {}, 5000).catch(function() {});
     }
@@ -520,9 +523,39 @@ export class BridgeSession extends Session {
         }).catch(function() { setTimeout(poll, 500); });
     }
 
-    poll();
-})();`;
+    poll();`;
     }
+
+    async getPayloadScript(): Promise<string> {
+        const sessionId = this.id;
+        const messagingUrl = `http://localhost:${this.proxyPort}/messaging`;
+        const initBlock = this._initScripts.length > 0
+            ? this._initScripts.map(s => `try { (function(){ ${s} })(); } catch(e) { console.error('[initScript]', e); }`).join('\n') + '\n'
+            : '';
+
+        return [
+            initBlock,
+            '(function() {',
+            this._setupVars(sessionId, messagingUrl),
+            this._consoleForwarder(),
+            this._errorForwarder(),
+            this._dialogForwarder(),
+            this._lifecycleForwarder(),
+            this._popupForwarder(),
+            this._workerForwarder(),
+            this._webSocketForwarder(),
+            this._fileChooserForwarder(),
+            this._frameForwarder(),
+            this._domHelperFns(),
+            this._executeCommandFn(),
+            this._pollFn(),
+            '})();',
+        ].join('\n');
+    }
+
+    // -------------------------------------------------------------------------
+    // Session overrides
+    // -------------------------------------------------------------------------
 
     async getIframePayloadScript(_iframeWithoutSrc: boolean): Promise<string> {
         return '';
@@ -540,14 +573,17 @@ export class BridgeSession extends Session {
 
     handlePageError(_ctx: unknown, _err: Error): void {}
 
+    // -------------------------------------------------------------------------
+    // Service message handlers (called by hammerhead via this[msg.cmd])
+    // -------------------------------------------------------------------------
+
     registerExposedFunction(name: string, fn: (...args: unknown[]) => unknown): void {
         this._exposedFunctions.set(name, fn);
     }
 
-    // Called by hammerhead's handleServiceMessage dispatcher via this[msg.cmd]
     async bridge_expose_call(msg: ServiceMsg): Promise<{ value?: unknown; error?: string }> {
         const m = msg as Record<string, unknown>;
-        const name = m.expName as string | undefined ?? '';
+        const name = (m.expName as string | undefined) ?? '';
         const args = (m.args as unknown[]) ?? [];
         const fn = this._exposedFunctions.get(name);
         if (!fn) return { error: `No exposed function: ${name}` };

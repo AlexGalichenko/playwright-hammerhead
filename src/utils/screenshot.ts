@@ -1,4 +1,4 @@
-import { readFileSync } from 'fs';
+import { readFileSync } from 'node:fs';
 
 let _cache: string | null = null;
 
