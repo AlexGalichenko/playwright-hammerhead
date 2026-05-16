@@ -28,4 +28,4 @@ export const test = base.extend<SafariTestFixtures, SafariWorkerFixtures>({
     },
 });
 
-export { expect } from '@playwright/test';
+export { expect } from '../src/matchers';
