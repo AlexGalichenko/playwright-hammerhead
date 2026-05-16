@@ -1,3 +1,4 @@
+import { readFileSync } from 'fs';
 import { Proxy, RequestFilterRule, RequestInfo } from 'testcafe-hammerhead';
 import { BridgeSession } from '../session/bridge-session';
 import { Locator } from './locator';
@@ -42,6 +43,19 @@ export interface WaitForSelectorOptions {
     timeout?: number;
 }
 
+export interface ScriptTagOptions {
+    url?: string;
+    path?: string;
+    content?: string;
+    type?: string;
+}
+
+export interface StyleTagOptions {
+    url?: string;
+    path?: string;
+    content?: string;
+}
+
 interface RouteEntry {
     pattern: UrlPattern;
     rule: RequestFilterRule;
@@ -54,6 +68,7 @@ export class Page {
 
     private readonly defaultTimeout: number;
     private readonly _routes: RouteEntry[] = [];
+    private readonly _locatorHandlerIntervals: ReturnType<typeof setInterval>[] = [];
 
     constructor(
         private readonly proxy: Proxy,
@@ -273,6 +288,89 @@ export class Page {
         }
     }
 
+    // --- Init scripts & handlers ---
+
+    async addInitScript(script: string | ((...args: unknown[]) => unknown), arg?: unknown): Promise<void> {
+        const scriptStr = typeof script === 'function'
+            ? `(${script.toString()})(${arg !== undefined ? JSON.stringify(arg) : ''})`
+            : script;
+        this.session.addInitScript(scriptStr);
+    }
+
+    async addLocatorHandler(locator: Locator, handler: () => Promise<void>): Promise<void> {
+        let running = false;
+        const interval = setInterval(async () => {
+            if (running) return;
+            try {
+                const visible = await locator.isVisible();
+                if (visible) {
+                    running = true;
+                    try { await handler(); } finally { running = false; }
+                }
+            } catch { running = false; }
+        }, 500);
+        this._locatorHandlerIntervals.push(interval);
+    }
+
+    // --- Script / style injection ---
+
+    async addScriptTag(options: ScriptTagOptions): Promise<void> {
+        let content = options.content;
+        if (options.path) content = readFileSync(options.path, 'utf-8');
+
+        if (content !== undefined) {
+            const typeAttr = options.type ? `s.type = ${JSON.stringify(options.type)};` : '';
+            await this.evaluate(`
+                (function() {
+                    var s = document.createElement('script');
+                    ${typeAttr}
+                    s.textContent = ${JSON.stringify(content)};
+                    document.head.appendChild(s);
+                    return null;
+                })()
+            `);
+        } else if (options.url) {
+            const typeAttr = options.type ? `s.type = ${JSON.stringify(options.type)};` : '';
+            await this.evaluate(`
+                new Promise(function(resolve, reject) {
+                    var s = document.createElement('script');
+                    ${typeAttr}
+                    s.onload = function() { resolve(null); };
+                    s.onerror = function() { reject(new Error('Failed to load script: ' + s.src)); };
+                    s.src = ${JSON.stringify(options.url)};
+                    document.head.appendChild(s);
+                })
+            `);
+        }
+    }
+
+    async addStyleTag(options: StyleTagOptions): Promise<void> {
+        let content = options.content;
+        if (options.path) content = readFileSync(options.path, 'utf-8');
+
+        if (content !== undefined) {
+            await this.evaluate(`
+                (function() {
+                    var s = document.createElement('style');
+                    s.textContent = ${JSON.stringify(content)};
+                    document.head.appendChild(s);
+                    return null;
+                })()
+            `);
+        } else if (options.url) {
+            await this.evaluate(`
+                new Promise(function(resolve, reject) {
+                    var link = document.createElement('link');
+                    link.rel = 'stylesheet';
+                    link.onload = function() { resolve(null); };
+                    link.onerror = function() { reject(new Error('Failed to load stylesheet: ' + link.href)); };
+                    link.href = ${JSON.stringify(options.url)};
+                    document.head.appendChild(link);
+                })
+            `);
+        }
+    }
+
     // --- Screenshot (no-op — cannot capture Safari screenshot from script) ---
 
     async screenshot(_options?: { path?: string; fullPage?: boolean }): Promise<Buffer> {
@@ -288,6 +386,8 @@ export class Page {
     // --- Lifecycle ---
 
     async close(): Promise<void> {
+        for (const interval of this._locatorHandlerIntervals) clearInterval(interval);
+        this._locatorHandlerIntervals.length = 0;
         this.proxy.closeSession(this.session);
         closeSafariWindowByUrlFragment(this.session.id);
     }

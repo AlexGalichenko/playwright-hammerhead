@@ -16,6 +16,7 @@ export class BridgeSession extends Session {
     private pendingPoll: Deferred<BridgeCommand | null> | null = null;
     private readyDeferred: Deferred<void> | null = null;
     private isReady = false;
+    private _initScripts: string[] = [];
 
     readonly proxyPort: number;
 
@@ -24,10 +25,17 @@ export class BridgeSession extends Session {
         this.proxyPort = proxyPort;
     }
 
+    addInitScript(script: string): void {
+        this._initScripts.push(script);
+    }
+
     async getPayloadScript(): Promise<string> {
         const sessionId = this.id;
         const messagingUrl = `http://localhost:${this.proxyPort}/messaging`;
-        return `(function() {
+        const initBlock = this._initScripts.length > 0
+            ? this._initScripts.map(s => `try { (function(){ ${s} })(); } catch(e) { console.error('[initScript]', e); }`).join('\n') + '\n'
+            : '';
+        return `${initBlock}(function() {
     var SESSION_ID = '${sessionId}';
     var MESSAGING_URL = '${messagingUrl}';
     var _hh = window['%hammerhead%'];

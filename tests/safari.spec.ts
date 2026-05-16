@@ -347,3 +347,167 @@ test.describe('Google calc', () => {
         expect(title).toContain('Google Search');
     });
 });
+
+test.describe('page.addInitScript', () => {
+    test('string script sets window variable before page code runs', async ({ safariPage: page }) => {
+        await page.addInitScript('window.__initFlag = true;');
+        await page.goto('https://www.saucedemo.com/');
+
+        const flag = await page.evaluate(() => (window as any).__initFlag);
+        expect(flag).toBe(true);
+    });
+
+    test('function script with serialised arg sets window variable', async ({ safariPage: page }) => {
+        await page.addInitScript((val: unknown) => { (window as any).__initArg = val; }, 42);
+        await page.goto('https://www.saucedemo.com/');
+
+        const val = await page.evaluate(() => (window as any).__initArg);
+        expect(val).toBe(42);
+    });
+
+    test('multiple init scripts all run', async ({ safariPage: page }) => {
+        await page.addInitScript('window.__a = 1;');
+        await page.addInitScript('window.__b = 2;');
+        await page.goto('https://www.saucedemo.com/');
+
+        const [a, b] = await page.evaluate(() => [(window as any).__a, (window as any).__b]);
+        expect(a).toBe(1);
+        expect(b).toBe(2);
+    });
+
+    test('init script re-runs on subsequent navigation', async ({ safariPage: page }) => {
+        await page.addInitScript('window.__nav = (window.__nav || 0) + 1;');
+        await page.goto('https://www.saucedemo.com/');
+        const first = await page.evaluate(() => (window as any).__nav);
+
+        await page.goto('https://www.saucedemo.com/');
+        const second = await page.evaluate(() => (window as any).__nav);
+
+        expect(first).toBe(1);
+        expect(second).toBe(1);
+    });
+});
+
+test.describe('page.addLocatorHandler', () => {
+    test('handler is called when locator becomes visible', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+        let handlerCalled = false;
+
+        await page.addLocatorHandler(page.locator('#__hh_overlay'), async () => {
+            handlerCalled = true;
+        });
+
+        await page.evaluate(() => {
+            const d = document.createElement('div');
+            d.id = '__hh_overlay';
+            d.style.cssText = 'width:100px;height:100px;position:fixed;top:0;left:0;background:red';
+            document.body.appendChild(d);
+        });
+
+        await page.waitForTimeout(1500);
+        expect(handlerCalled).toBe(true);
+    });
+
+    test('handler is not called before locator appears', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+        let handlerCalled = false;
+
+        await page.addLocatorHandler(page.locator('#__never_exists'), async () => {
+            handlerCalled = true;
+        });
+
+        await page.waitForTimeout(600);
+        expect(handlerCalled).toBe(false);
+    });
+
+    test('handler is not called again while already running', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+        let callCount = 0;
+
+        await page.addLocatorHandler(page.locator('#__slow_overlay'), async () => {
+            callCount++;
+            await page.waitForTimeout(800);
+        });
+
+        await page.evaluate(() => {
+            const d = document.createElement('div');
+            d.id = '__slow_overlay';
+            d.style.cssText = 'width:50px;height:50px;position:fixed;top:0;left:0';
+            document.body.appendChild(d);
+        });
+
+        await page.waitForTimeout(1200);
+        expect(callCount).toBe(1);
+    });
+});
+
+test.describe('page.addScriptTag', () => {
+    test('inline content script is executed in page context', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+        await page.addScriptTag({ content: 'window.__scriptTag = 123;' });
+
+        const val = await page.evaluate(() => (window as any).__scriptTag);
+        expect(val).toBe(123);
+    });
+
+    test('type attribute is set on injected script element', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+        await page.addScriptTag({ content: 'window.__typedScript = true;', type: 'text/javascript' });
+
+        const val = await page.evaluate(() => (window as any).__typedScript);
+        expect(val).toBe(true);
+    });
+
+    test('multiple script tags can be injected independently', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+        await page.addScriptTag({ content: 'window.__s1 = "first";' });
+        await page.addScriptTag({ content: 'window.__s2 = "second";' });
+
+        const [s1, s2] = await page.evaluate(() => [(window as any).__s1, (window as any).__s2]);
+        expect(s1).toBe('first');
+        expect(s2).toBe('second');
+    });
+});
+
+test.describe('page.addStyleTag', () => {
+    test('inline content style is applied to the page', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+        await page.addStyleTag({ content: '#login-button { opacity: 0.5; }' });
+
+        const opacity = await page.evaluate(() => {
+            const el = document.querySelector('#login-button');
+            return el ? window.getComputedStyle(el).opacity : null;
+        });
+        expect(opacity).toBe('0.5');
+    });
+
+    test('multiple style tags can be injected and both apply', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+        await page.addStyleTag({ content: '#user-name { color: rgb(255, 0, 0); }' });
+        await page.addStyleTag({ content: '#password { color: rgb(0, 0, 255); }' });
+
+        const [c1, c2] = await page.evaluate(() => [
+            window.getComputedStyle(document.querySelector('#user-name')!).color,
+            window.getComputedStyle(document.querySelector('#password')!).color,
+        ]);
+        expect(c1).toBe('rgb(255, 0, 0)');
+        expect(c2).toBe('rgb(0, 0, 255)');
+    });
+
+    test('injected style does not affect unrelated elements', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+        await page.addStyleTag({ content: '#user-name { visibility: hidden; }' });
+
+        const userNameVisible = await page.evaluate(() => {
+            const el = document.querySelector('#user-name');
+            return el ? window.getComputedStyle(el).visibility !== 'hidden' : true;
+        });
+        const passwordVisible = await page.evaluate(() => {
+            const el = document.querySelector('#password');
+            return el ? window.getComputedStyle(el).visibility !== 'hidden' : false;
+        });
+
+        expect(userNameVisible).toBe(false);
+        expect(passwordVisible).toBe(true);
+    });
+});
