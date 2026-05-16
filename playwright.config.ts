@@ -9,6 +9,7 @@ export default defineConfig({
     reporter: [['html', { open: 'never' }]],
     use: {
         trace: 'on-first-retry',
+        actionTimeout: 10 * 1000,
     },
 
     projects: [

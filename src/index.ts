@@ -1,7 +1,7 @@
-export { safari, SafariBrowserType, LaunchOptions } from './browser/browser-type';
+export { safari, SafariBrowserType, LaunchOptions, UseOptions } from './browser/browser-type';
 export { expect } from './matchers';
 export { Route, Request, FulfillOptions, ContinueOptions } from './page/route';
-export { RouteHandler, UrlPattern, RouteOptions, ScriptTagOptions, StyleTagOptions, ScreenshotOptions } from './page/page';
+export { RouteHandler, UrlPattern, RouteOptions, ScriptTagOptions, StyleTagOptions, ScreenshotOptions, PageConfig } from './page/page';
 export { Browser, NewPageOptions } from './browser/browser';
 export { Page, GotoOptions, WaitForSelectorOptions, WaitUntilState } from './page/page';
 export { Locator, LocatorState, LocatorFilter } from './page/locator';

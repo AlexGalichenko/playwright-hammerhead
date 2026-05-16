@@ -34,8 +34,12 @@ A Playwright-compatible API layer for Safari automation via [testcafe-hammerhead
 | `focus(selector)` | ✅ | |
 | `waitForSelector(selector, options?)` | ✅ | |
 | `waitForTimeout(ms)` | ✅ | |
-| `waitForLoadState(state?)` | ✅ | |
+| `waitForLoadState(state?)` | ✅ | domcontentloaded, load, networkidle |
 | `waitForURL(url, options?)` | ✅ | |
+| `waitForEvent(event, options?)` | ✅ | |
+| `waitForFunction(fn, options?)` | ✅ | polling interval configurable |
+| `waitForRequest(urlOrPredicate, options?)` | ✅ | string, RegExp, or predicate |
+| `waitForResponse(urlOrPredicate, options?)` | ✅ | string, RegExp, or predicate |
 | `evaluate(fn, ...args)` | ✅ | |
 | `evaluateHandle(fn, ...args)` | ✅ | |
 | `route(pattern, handler, options?)` | ✅ | |
@@ -48,7 +52,7 @@ A Playwright-compatible API layer for Safari automation via [testcafe-hammerhead
 | `close()` | ✅ | |
 | `on(event, listener)` / `once` / `off` | ✅ | console, dialog, load, request, … |
 | `setDefaultTimeout(ms)` | ✅ | |
-| `setDefaultNavigationTimeout(ms)` | ❌ | navigation-specific timeout |
+| `setDefaultNavigationTimeout(ms)` | ✅ | |
 | `setViewportSize(size)` | ❌ | resize viewport |
 | `viewportSize()` | ❌ | return current size |
 | `bringToFront()` | ❌ | OS-level window focus |

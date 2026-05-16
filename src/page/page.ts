@@ -39,6 +39,12 @@ function patternToRule(pattern: UrlPattern): RequestFilterRule {
 
 export type WaitUntilState = 'domcontentloaded' | 'load' | 'networkidle';
 
+export interface PageConfig {
+    actionTimeout?: number;
+    navigationTimeout?: number;
+    expectTimeout?: number;
+}
+
 export interface GotoOptions {
     timeout?: number;
     waitUntil?: WaitUntilState;
@@ -138,6 +144,8 @@ export class Page extends EventEmitter {
     readonly mouse: Mouse;
 
     private defaultTimeout: number;
+    private navigationTimeout: number;
+    readonly expectTimeout: number;
     private readonly _routes: RouteEntry[] = [];
     private readonly _locatorHandlerIntervals: ReturnType<typeof setInterval>[] = [];
     private readonly _requestInfoMap = new Map<string, RequestInfo>();
@@ -146,10 +154,12 @@ export class Page extends EventEmitter {
     constructor(
         private readonly proxy: Proxy,
         private readonly session: BridgeSession,
-        defaultTimeout = 30000
+        config: PageConfig = {}
     ) {
         super();
-        this.defaultTimeout = defaultTimeout;
+        this.defaultTimeout = config.actionTimeout ?? 10_000;
+        this.navigationTimeout = config.navigationTimeout ?? this.defaultTimeout;
+        this.expectTimeout = config.expectTimeout ?? 5_000;
         this.keyboard = new Keyboard(session);
         this.mouse = new Mouse(session);
         this.session.setEventListener((event, data) => this._handleBridgeEvent(event, data as Record<string, unknown>));
@@ -238,12 +248,17 @@ export class Page extends EventEmitter {
 
     setDefaultTimeout(ms: number): void {
         this.defaultTimeout = ms;
+        this.navigationTimeout = ms;
+    }
+
+    setDefaultNavigationTimeout(ms: number): void {
+        this.navigationTimeout = ms;
     }
 
     // --- Navigation ---
 
     async goto(url: string, options?: GotoOptions): Promise<void> {
-        const timeout = options?.timeout ?? this.defaultTimeout;
+        const timeout = options?.timeout ?? this.navigationTimeout;
         (this.session as unknown as { isReady: boolean }).isReady = false;
 
         const proxiedUrl = this.proxy.openSession(url, this.session, { url: '' });
@@ -253,7 +268,7 @@ export class Page extends EventEmitter {
     }
 
     async reload(options?: { timeout?: number }): Promise<void> {
-        const timeout = options?.timeout ?? this.defaultTimeout;
+        const timeout = options?.timeout ?? this.navigationTimeout;
         (this.session as unknown as { isReady: boolean }).isReady = false;
         const readyPromise = this.session.waitForReady(timeout);
         await this.session.sendCommand({ type: 'evaluate', expression: 'location.reload()' }).catch(() => {});
@@ -261,7 +276,7 @@ export class Page extends EventEmitter {
     }
 
     async goBack(options?: { timeout?: number }): Promise<void> {
-        const timeout = options?.timeout ?? this.defaultTimeout;
+        const timeout = options?.timeout ?? this.navigationTimeout;
         (this.session as unknown as { isReady: boolean }).isReady = false;
         const readyPromise = this.session.waitForReady(timeout);
         await this.session.sendCommand({ type: 'evaluate', expression: 'history.back()' }).catch(() => {});
@@ -269,7 +284,7 @@ export class Page extends EventEmitter {
     }
 
     async goForward(options?: { timeout?: number }): Promise<void> {
-        const timeout = options?.timeout ?? this.defaultTimeout;
+        const timeout = options?.timeout ?? this.navigationTimeout;
         (this.session as unknown as { isReady: boolean }).isReady = false;
         const readyPromise = this.session.waitForReady(timeout);
         await this.session.sendCommand({ type: 'evaluate', expression: 'history.forward()' }).catch(() => {});
@@ -293,34 +308,32 @@ export class Page extends EventEmitter {
     // --- Locators ---
 
     locator(selector: string): Locator {
-        return new Locator(this.session, selector, this.defaultTimeout);
+        return new Locator(this.session, selector, this.defaultTimeout, undefined, undefined, this.expectTimeout);
     }
 
     getByRole(_role: string, options?: { name?: string | RegExp }): Locator {
         if (options?.name) {
-            const name = typeof options.name === 'string'
-                ? options.name
-                : options.name.source;
-            return new Locator(this.session, `[role="${_role}"][aria-label*="${name}"], [role="${_role}"]:contains("${name}")`, this.defaultTimeout);
+            const name = typeof options.name === 'string' ? options.name : options.name.source;
+            return this.locator(`[role="${_role}"][aria-label*="${name}"], [role="${_role}"]:contains("${name}")`);
         }
-        return new Locator(this.session, `[role="${_role}"]`, this.defaultTimeout);
+        return this.locator(`[role="${_role}"]`);
     }
 
     getByText(text: string | RegExp): Locator {
         const textStr = typeof text === 'string' ? text : text.source;
-        return new Locator(this.session, `*:contains("${textStr}")`, this.defaultTimeout);
+        return this.locator(`*:contains("${textStr}")`);
     }
 
     getByLabel(text: string): Locator {
-        return new Locator(this.session, `[aria-label="${text}"], label:contains("${text}") + input, label:contains("${text}") ~ input`, this.defaultTimeout);
+        return this.locator(`[aria-label="${text}"], label:contains("${text}") + input, label:contains("${text}") ~ input`);
     }
 
     getByPlaceholder(placeholder: string): Locator {
-        return new Locator(this.session, `[placeholder="${placeholder}"]`, this.defaultTimeout);
+        return this.locator(`[placeholder="${placeholder}"]`);
     }
 
     getByTestId(testId: string): Locator {
-        return new Locator(this.session, `[data-testid="${testId}"]`, this.defaultTimeout);
+        return this.locator(`[data-testid="${testId}"]`);
     }
 
     // --- Direct element actions ---
@@ -369,12 +382,21 @@ export class Page extends EventEmitter {
         return new Promise(resolve => setTimeout(resolve, ms));
     }
 
-    async waitForLoadState(_state: WaitUntilState = 'load'): Promise<void> {
+    async waitForLoadState(state: WaitUntilState = 'load'): Promise<void> {
+        if (state === 'networkidle') {
+            await this.waitForLoadState('load');
+            await this.waitForTimeout(500);
+            return;
+        }
+        const readyStateOk = state === 'domcontentloaded'
+            ? `['interactive','complete'].indexOf(document.readyState) !== -1`
+            : `document.readyState === 'complete'`;
+        const eventName = state === 'domcontentloaded' ? 'DOMContentLoaded' : 'load';
         await this.session.sendCommand({
             type: 'evaluate',
-            expression: `new Promise(resolve => {
-                if (document.readyState === 'complete') { resolve(); return; }
-                window.addEventListener('load', resolve, { once: true });
+            expression: `new Promise(function(resolve) {
+                if (${readyStateOk}) { resolve(); return; }
+                window.addEventListener(${JSON.stringify(eventName)}, resolve, { once: true });
             })`,
         });
     }
@@ -389,6 +411,82 @@ export class Page extends EventEmitter {
             await new Promise(r => setTimeout(r, 200));
         }
         throw new Error(`Timeout ${timeout}ms waiting for URL: ${url}`);
+    }
+
+    async waitForEvent(event: string, options?: { timeout?: number }): Promise<unknown> {
+        const timeout = options?.timeout ?? this.defaultTimeout;
+        return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+                (this as unknown as EventEmitter).off(event, handler);
+                reject(new Error(`Timeout ${timeout}ms waiting for event: ${event}`));
+            }, timeout);
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const handler = (data: any) => { clearTimeout(timer); resolve(data); };
+            (this as unknown as EventEmitter).once(event, handler);
+        });
+    }
+
+    async waitForFunction<T = unknown>(
+        fn: (() => T) | string,
+        options?: { timeout?: number; polling?: number }
+    ): Promise<T> {
+        const timeout = options?.timeout ?? this.defaultTimeout;
+        const polling = options?.polling ?? 100;
+        const deadline = Date.now() + timeout;
+        while (Date.now() < deadline) {
+            const result = await this.evaluate(fn as () => T);
+            if (result) return result;
+            await new Promise(r => setTimeout(r, polling));
+        }
+        throw new Error(`Timeout ${timeout}ms waiting for function to return truthy`);
+    }
+
+    async waitForRequest(
+        urlOrPredicate: string | RegExp | ((request: Request) => boolean),
+        options?: { timeout?: number }
+    ): Promise<Request> {
+        const timeout = options?.timeout ?? this.defaultTimeout;
+        if (!this._requestHookSetup) this._setupRequestHook();
+        return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+                this.off('request', handler);
+                reject(new Error(`Timeout ${timeout}ms waiting for request`));
+            }, timeout);
+            const handler = (request: Request) => {
+                const u = request.url();
+                const matches = typeof urlOrPredicate === 'function'
+                    ? urlOrPredicate(request)
+                    : urlOrPredicate instanceof RegExp
+                        ? urlOrPredicate.test(u)
+                        : u.includes(urlOrPredicate);
+                if (matches) { clearTimeout(timer); this.off('request', handler); resolve(request); }
+            };
+            this.on('request', handler);
+        });
+    }
+
+    async waitForResponse(
+        urlOrPredicate: string | RegExp | ((response: PageResponse) => boolean),
+        options?: { timeout?: number }
+    ): Promise<PageResponse> {
+        const timeout = options?.timeout ?? this.defaultTimeout;
+        if (!this._requestHookSetup) this._setupRequestHook();
+        return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+                this.off('response', handler);
+                reject(new Error(`Timeout ${timeout}ms waiting for response`));
+            }, timeout);
+            const handler = (response: PageResponse) => {
+                const u = response.url();
+                const matches = typeof urlOrPredicate === 'function'
+                    ? urlOrPredicate(response)
+                    : urlOrPredicate instanceof RegExp
+                        ? urlOrPredicate.test(u)
+                        : u.includes(urlOrPredicate);
+                if (matches) { clearTimeout(timer); this.off('response', handler); resolve(response); }
+            };
+            this.on('response', handler);
+        });
     }
 
     // --- Evaluation ---

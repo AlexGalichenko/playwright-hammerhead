@@ -15,6 +15,7 @@ type SerializedText = string | { source: string; flags: string };
 
 export class Locator {
     readonly selector: string;
+    readonly _expectTimeout: number;
 
     constructor(
         private readonly session: BridgeSession,
@@ -22,8 +23,10 @@ export class Locator {
         private readonly defaultTimeout: number = 30000,
         private readonly _filter?: LocatorFilter,
         private readonly _nth?: number,
+        _expectTimeout: number = 5000,
     ) {
         this.selector = selector;
+        this._expectTimeout = _expectTimeout;
     }
 
     private get _cssSel(): string {
@@ -353,23 +356,23 @@ export class Locator {
     }
 
     nth(index: number): Locator {
-        return new Locator(this.session, `:is(${this.selector}):nth-child(${index + 1})`, this.defaultTimeout);
+        return new Locator(this.session, `:is(${this.selector}):nth-child(${index + 1})`, this.defaultTimeout, undefined, undefined, this._expectTimeout);
     }
 
     first(): Locator {
-        return new Locator(this.session, `:is(${this.selector}):first-child`, this.defaultTimeout);
+        return new Locator(this.session, `:is(${this.selector}):first-child`, this.defaultTimeout, undefined, undefined, this._expectTimeout);
     }
 
     last(): Locator {
-        return new Locator(this.session, `:is(${this.selector}):last-child`, this.defaultTimeout);
+        return new Locator(this.session, `:is(${this.selector}):last-child`, this.defaultTimeout, undefined, undefined, this._expectTimeout);
     }
 
     locator(subSelector: string): Locator {
-        return new Locator(this.session, `${this.selector} ${subSelector}`, this.defaultTimeout);
+        return new Locator(this.session, `${this.selector} ${subSelector}`, this.defaultTimeout, undefined, undefined, this._expectTimeout);
     }
 
     filter(options: LocatorFilter): Locator {
-        return new Locator(this.session, this.selector, this.defaultTimeout, { ...this._filter, ...options });
+        return new Locator(this.session, this.selector, this.defaultTimeout, { ...this._filter, ...options }, undefined, this._expectTimeout);
     }
 
     async all(): Promise<Locator[]> {
@@ -380,10 +383,10 @@ export class Locator {
                 selector: this._cssSel,
                 ...this._filterExtras(),
             });
-            return indices.map(i => new Locator(this.session, this._cssSel, this.defaultTimeout, undefined, i));
+            return indices.map(i => new Locator(this.session, this._cssSel, this.defaultTimeout, undefined, i, this._expectTimeout));
         }
         const count = await this.session.sendCommand<number>({ type: 'count', selector: this._cssSel });
-        return Array.from({ length: count }, (_, i) => new Locator(this.session, this._cssSel, this.defaultTimeout, undefined, i));
+        return Array.from({ length: count }, (_, i) => new Locator(this.session, this._cssSel, this.defaultTimeout, undefined, i, this._expectTimeout));
     }
 
     async allTextContents(): Promise<string[]> {
@@ -428,11 +431,11 @@ export class Locator {
     // --- Composition ---
 
     and(other: Locator): Locator {
-        return new Locator(this.session, `:is(${this.selector}):is(${other.selector})`, this.defaultTimeout);
+        return new Locator(this.session, `:is(${this.selector}):is(${other.selector})`, this.defaultTimeout, undefined, undefined, this._expectTimeout);
     }
 
     or(other: Locator): Locator {
-        return new Locator(this.session, `:is(${this.selector}), :is(${other.selector})`, this.defaultTimeout);
+        return new Locator(this.session, `:is(${this.selector}), :is(${other.selector})`, this.defaultTimeout, undefined, undefined, this._expectTimeout);
     }
 
     // --- Drag ---

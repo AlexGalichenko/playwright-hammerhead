@@ -22,7 +22,7 @@ type MatcherResult = Promise<{ pass: boolean; message: () => string }>;
 
 const locatorMatchers = {
     async toBeVisible(this: MatcherContext, locator: Locator, options?: MatcherOptions): MatcherResult {
-        const timeout = options?.timeout ?? 5000;
+        const timeout = options?.timeout ?? locator._expectTimeout;
         const pass = await waitForCondition(() => locator.isVisible(), !this.isNot, timeout);
         return {
             pass,
@@ -31,7 +31,7 @@ const locatorMatchers = {
     },
 
     async toBeHidden(this: MatcherContext, locator: Locator, options?: MatcherOptions): MatcherResult {
-        const timeout = options?.timeout ?? 5000;
+        const timeout = options?.timeout ?? locator._expectTimeout;
         const pass = await waitForCondition(
             async () => !(await locator.isVisible()),
             !this.isNot,
@@ -44,7 +44,7 @@ const locatorMatchers = {
     },
 
     async toBeEnabled(this: MatcherContext, locator: Locator, options?: MatcherOptions): MatcherResult {
-        const timeout = options?.timeout ?? 5000;
+        const timeout = options?.timeout ?? locator._expectTimeout;
         const pass = await waitForCondition(() => locator.isEnabled(), !this.isNot, timeout);
         return {
             pass,
@@ -53,7 +53,7 @@ const locatorMatchers = {
     },
 
     async toBeDisabled(this: MatcherContext, locator: Locator, options?: MatcherOptions): MatcherResult {
-        const timeout = options?.timeout ?? 5000;
+        const timeout = options?.timeout ?? locator._expectTimeout;
         const pass = await waitForCondition(() => locator.isDisabled(), !this.isNot, timeout);
         return {
             pass,
@@ -62,7 +62,7 @@ const locatorMatchers = {
     },
 
     async toBeChecked(this: MatcherContext, locator: Locator, options?: MatcherOptions): MatcherResult {
-        const timeout = options?.timeout ?? 5000;
+        const timeout = options?.timeout ?? locator._expectTimeout;
         const pass = await waitForCondition(() => locator.isChecked(), !this.isNot, timeout);
         return {
             pass,
@@ -71,7 +71,7 @@ const locatorMatchers = {
     },
 
     async toBeEditable(this: MatcherContext, locator: Locator, options?: MatcherOptions): MatcherResult {
-        const timeout = options?.timeout ?? 5000;
+        const timeout = options?.timeout ?? locator._expectTimeout;
         const pass = await waitForCondition(() => locator.isEditable(), !this.isNot, timeout);
         return {
             pass,
@@ -85,7 +85,7 @@ const locatorMatchers = {
         expected: string | RegExp,
         options?: MatcherOptions
     ): MatcherResult {
-        const timeout = options?.timeout ?? 5000;
+        const timeout = options?.timeout ?? locator._expectTimeout;
         let actual: string | null = null;
         const matches = (text: string) =>
             typeof expected === 'string' ? text.trim() === expected : expected.test(text);
@@ -106,7 +106,7 @@ const locatorMatchers = {
         expected: string | RegExp,
         options?: MatcherOptions
     ): MatcherResult {
-        const timeout = options?.timeout ?? 5000;
+        const timeout = options?.timeout ?? locator._expectTimeout;
         let actual: string | null = null;
         const contains = (text: string) =>
             typeof expected === 'string' ? text.includes(expected) : expected.test(text);
@@ -127,7 +127,7 @@ const locatorMatchers = {
         expected: string | RegExp,
         options?: MatcherOptions
     ): MatcherResult {
-        const timeout = options?.timeout ?? 5000;
+        const timeout = options?.timeout ?? locator._expectTimeout;
         let actual = '';
         const matches = (v: string) =>
             typeof expected === 'string' ? v === expected : expected.test(v);
@@ -149,7 +149,7 @@ const locatorMatchers = {
         expected: string | RegExp,
         options?: MatcherOptions
     ): MatcherResult {
-        const timeout = options?.timeout ?? 5000;
+        const timeout = options?.timeout ?? locator._expectTimeout;
         let actual: string | null = null;
         const matches = (v: string) =>
             typeof expected === 'string' ? v === expected : expected.test(v);
@@ -170,7 +170,7 @@ const locatorMatchers = {
         expected: number,
         options?: MatcherOptions
     ): MatcherResult {
-        const timeout = options?.timeout ?? 5000;
+        const timeout = options?.timeout ?? locator._expectTimeout;
         let actual = 0;
         const pass = await waitForCondition(async () => {
             actual = await locator.count();

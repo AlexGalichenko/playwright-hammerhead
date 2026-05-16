@@ -1,6 +1,15 @@
 import { Proxy } from 'testcafe-hammerhead';
 import { Browser } from './browser';
 
+export interface UseOptions {
+    /** Default timeout for page actions and locator operations (default: 30000) */
+    actionTimeout?: number;
+    /** Default timeout for navigation methods like goto/reload/goBack (default: same as actionTimeout) */
+    navigationTimeout?: number;
+    /** Default timeout for expect() assertions (default: 5000) */
+    expectTimeout?: number;
+}
+
 export interface LaunchOptions {
     /** Proxy port for the hammerhead server (default: 1337) */
     port?: number;
@@ -8,8 +17,8 @@ export interface LaunchOptions {
     crossDomainPort?: number;
     /** Whether to run in development mode (verbose logging) */
     devMode?: boolean;
-    /** Default navigation timeout in ms (default: 30000) */
-    defaultTimeout?: number;
+    /** Timeout defaults applied to every page created by this browser */
+    use?: UseOptions;
 }
 
 export class SafariBrowserType {
@@ -27,7 +36,7 @@ export class SafariBrowserType {
             developmentMode: options.devMode ?? false,
         });
 
-        return new Browser(proxy, port);
+        return new Browser(proxy, port, options.use);
     }
 }
 
