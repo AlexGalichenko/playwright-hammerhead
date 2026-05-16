@@ -11,10 +11,14 @@ type SafariTestFixtures = {
     safariPage: Page;
 };
 
+const PORT = 9000;
+
 export const test = base.extend<SafariTestFixtures, SafariWorkerFixtures>({
     safariBrowser: [
-        async ({}, use) => {
-            const browser = await safari.launch({ port: 1337, crossDomainPort: 1338 });
+        async ({}, use, testInfo) => {
+            const port = PORT + 2 * testInfo.workerIndex;
+            const crossDomainPort = port + 1;
+            const browser = await safari.launch({ port: port, crossDomainPort: crossDomainPort });
             await use(browser);
             await browser.close();
         },
