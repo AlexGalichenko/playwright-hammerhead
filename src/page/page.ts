@@ -1,4 +1,4 @@
-import { readFileSync } from 'fs';
+import { readFileSync, writeFileSync } from 'fs';
 import { EventEmitter } from 'events';
 import { Proxy, RequestFilterRule, RequestInfo, ResponseEvent } from 'testcafe-hammerhead';
 import { BridgeSession } from '../session/bridge-session';
@@ -17,6 +17,16 @@ export type { FulfillOptions, ContinueOptions };
 export type RouteHandler = (route: Route, request: Request) => void | Promise<void>;
 export type UrlPattern = string | RegExp | ((url: string) => boolean);
 export interface RouteOptions { debug?: boolean; }
+
+let _modernScreenshotCodeCache: string | null = null;
+function _getModernScreenshotCode(): string {
+    if (!_modernScreenshotCodeCache) {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const libPath: string = require.resolve('modern-screenshot/dist/index.js');
+        _modernScreenshotCodeCache = readFileSync(libPath, 'utf-8');
+    }
+    return _modernScreenshotCodeCache;
+}
 
 function patternToRule(pattern: UrlPattern): RequestFilterRule {
     if (typeof pattern === 'string') {
@@ -59,6 +69,13 @@ export interface StyleTagOptions {
     url?: string;
     path?: string;
     content?: string;
+}
+
+export interface ScreenshotOptions {
+    path?: string;
+    fullPage?: boolean;
+    type?: 'png' | 'jpeg';
+    quality?: number;
 }
 
 const REQUEST_EVENTS = new Set(['request', 'response', 'requestfinished', 'requestfailed']);
@@ -519,10 +536,45 @@ export class Page extends EventEmitter {
         }
     }
 
-    // --- Screenshot (no-op — cannot capture Safari screenshot from script) ---
+    // --- Screenshot via modern-screenshot ---
 
-    async screenshot(_options?: { path?: string; fullPage?: boolean }): Promise<Buffer> {
-        return Buffer.alloc(0);
+    async screenshot(options?: ScreenshotOptions): Promise<Buffer> {
+        const libCode = _getModernScreenshotCode();
+        const isJpeg = options?.type === 'jpeg';
+        const quality = options?.quality ?? (isJpeg ? 0.92 : 1);
+        const msType = isJpeg ? 'image/jpeg' : 'image/png';
+        const fullPage = options?.fullPage ?? false;
+
+        const expression = `
+            new Promise(function(resolve, reject) {
+                try {
+                    if (!window.__modernScreenshotLoaded) {
+                        var s = document.createElement('script');
+                        s.textContent = ${JSON.stringify(libCode)};
+                        document.head.appendChild(s);
+                        window.__modernScreenshotLoaded = true;
+                    }
+                    var target = document.documentElement;
+                    var opts = { type: ${JSON.stringify(msType)}, quality: ${quality} };
+                    if (${fullPage}) {
+                        opts.width = document.documentElement.scrollWidth;
+                        opts.height = document.documentElement.scrollHeight;
+                    }
+                    var fn = ${isJpeg} ? window.modernScreenshot.domToJpeg : window.modernScreenshot.domToPng;
+                    fn(target, opts).then(resolve).catch(reject);
+                } catch(e) { reject(e instanceof Error ? e.message : String(e)); }
+            })
+        `;
+
+        const dataUrl = await this.session.sendCommand<string>({ type: 'evaluate', expression });
+        if (!dataUrl || typeof dataUrl !== 'string') return Buffer.alloc(0);
+
+        const base64 = dataUrl.split(',')[1] ?? '';
+        const buffer = Buffer.from(base64, 'base64');
+
+        if (options?.path) writeFileSync(options.path, buffer);
+
+        return buffer;
     }
 
     // --- Scroll ---

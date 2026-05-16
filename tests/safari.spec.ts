@@ -15,6 +15,9 @@ test.describe('Saucedemo checkout flow', () => {
 
         await expect(page.locator('.shopping_cart_badge')).toHaveText('1');
 
+        await test.info().attach('screenshot.png', {
+            body: await page.screenshot(),
+        });
         await page.click('.shopping_cart_link');
 
         await expect(page.locator('.cart_item')).toBeVisible();
