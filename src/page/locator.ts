@@ -1,6 +1,8 @@
-import { writeFileSync } from 'fs';
+import { readFileSync, writeFileSync } from 'fs';
 import { BridgeSession } from '../session/bridge-session';
 import { getModernScreenshotCode } from '../utils/screenshot';
+import type { Page } from './page';
+import type { FilePayload } from './page';
 
 export type StepReporter = <T>(title: string, fn: () => Promise<T>) => Promise<T>;
 
@@ -34,6 +36,7 @@ export class Locator {
     readonly _steps: SelectorStep[];
     readonly _expectTimeout: number;
     readonly _stepReporter: StepReporter;
+    private readonly _page: Page | undefined;
 
     /** First CSS selector in the chain — kept for error messages. */
     get selector(): string {
@@ -47,10 +50,21 @@ export class Locator {
         private readonly defaultTimeout: number = 30000,
         _expectTimeout: number = 5000,
         stepReporter: StepReporter = noopReporter,
+        page?: Page,
     ) {
         this._steps = steps;
         this._expectTimeout = _expectTimeout;
         this._stepReporter = stepReporter;
+        this._page = page;
+    }
+
+    page(): Page {
+        if (!this._page) throw new Error('Locator is not attached to a page');
+        return this._page;
+    }
+
+    toString(): string {
+        return this._description();
     }
 
     _description(): string {
@@ -92,6 +106,7 @@ export class Locator {
         defaultTimeout: number,
         expectTimeout: number,
         stepReporter: StepReporter = noopReporter,
+        page?: Page,
     ): Locator {
         const { cleanSelector, hasText, hasNotText } = Locator._parseHasTextPseudo(rawSelector);
         const steps: SelectorStep[] = [{ kind: 'css', sel: cleanSelector }];
@@ -101,7 +116,7 @@ export class Locator {
             if (hasNotText !== undefined) f.hasNotText = Locator._serText(hasNotText);
             steps.push(f);
         }
-        return new Locator(session, steps, defaultTimeout, expectTimeout, stepReporter);
+        return new Locator(session, steps, defaultTimeout, expectTimeout, stepReporter, page);
     }
 
     // -------------------------------------------------------------------------
@@ -178,6 +193,27 @@ export class Locator {
             const timeout = options?.timeout ?? this.defaultTimeout;
             await this._waitForActionable(timeout);
             await this.session.sendCommand({ type: 'dblclick', steps: this._steps, timeout });
+        });
+    }
+
+    async tap(options?: { timeout?: number }): Promise<void> {
+        return this._runStep(`${this._description()}.tap()`, async () => {
+            const timeout = options?.timeout ?? this.defaultTimeout;
+            await this._waitForActionable(timeout);
+            await this.session.sendCommand({
+                type: 'evaluate',
+                expression: `(function() {
+                    var els = resolveSteps(${JSON.stringify(this._steps)});
+                    var el = els[0];
+                    if (!el) throw new Error('Element not found for tap');
+                    var r = el.getBoundingClientRect();
+                    var x = r.left + r.width / 2, y = r.top + r.height / 2;
+                    ['touchstart','touchend'].forEach(function(type) {
+                        var t = new Touch({ identifier: 1, target: el, clientX: x, clientY: y, pageX: x, pageY: y });
+                        el.dispatchEvent(new TouchEvent(type, { touches: type === 'touchstart' ? [t] : [], changedTouches: [t], bubbles: true }));
+                    });
+                })()`,
+            });
         });
     }
 
@@ -429,33 +465,15 @@ export class Locator {
     }
 
     nth(index: number): Locator {
-        return new Locator(
-            this.session,
-            [...this._steps, { kind: 'nth', index }],
-            this.defaultTimeout,
-            this._expectTimeout,
-            this._stepReporter,
-        );
+        return new Locator(this.session, [...this._steps, { kind: 'nth', index }], this.defaultTimeout, this._expectTimeout, this._stepReporter, this._page);
     }
 
     first(): Locator {
-        return new Locator(
-            this.session,
-            [...this._steps, { kind: 'nth', index: 0 }],
-            this.defaultTimeout,
-            this._expectTimeout,
-            this._stepReporter,
-        );
+        return new Locator(this.session, [...this._steps, { kind: 'nth', index: 0 }], this.defaultTimeout, this._expectTimeout, this._stepReporter, this._page);
     }
 
     last(): Locator {
-        return new Locator(
-            this.session,
-            [...this._steps, { kind: 'nth', index: -1 }],
-            this.defaultTimeout,
-            this._expectTimeout,
-            this._stepReporter,
-        );
+        return new Locator(this.session, [...this._steps, { kind: 'nth', index: -1 }], this.defaultTimeout, this._expectTimeout, this._stepReporter, this._page);
     }
 
     locator(subSelector: string): Locator {
@@ -467,7 +485,42 @@ export class Locator {
             if (hasNotText !== undefined) f.hasNotText = Locator._serText(hasNotText);
             steps.push(f);
         }
-        return new Locator(this.session, steps, this.defaultTimeout, this._expectTimeout, this._stepReporter);
+        return new Locator(this.session, steps, this.defaultTimeout, this._expectTimeout, this._stepReporter, this._page);
+    }
+
+    getByRole(role: string, options?: { name?: string | RegExp }): Locator {
+        if (options?.name) {
+            const name = typeof options.name === 'string' ? options.name : options.name.source;
+            return this.locator(`[role="${role}"][aria-label*="${name}"], [role="${role}"]:has-text("${name}")`);
+        }
+        return this.locator(`[role="${role}"]`);
+    }
+
+    getByText(text: string | RegExp): Locator {
+        const t = typeof text === 'string' ? text : text.source;
+        return this.locator(`*:has-text("${t}")`);
+    }
+
+    getByLabel(text: string): Locator {
+        return this.locator(`[aria-label="${text}"], label:has-text("${text}") + input, label:has-text("${text}") ~ input`);
+    }
+
+    getByPlaceholder(placeholder: string): Locator {
+        return this.locator(`[placeholder="${placeholder}"]`);
+    }
+
+    getByTestId(testId: string): Locator {
+        return this.locator(`[data-testid="${testId}"]`);
+    }
+
+    getByAltText(text: string | RegExp): Locator {
+        const t = typeof text === 'string' ? text : text.source;
+        return this.locator(`[alt="${t}"], [alt*="${t}"]`);
+    }
+
+    getByTitle(text: string | RegExp): Locator {
+        const t = typeof text === 'string' ? text : text.source;
+        return this.locator(`[title="${t}"]`);
     }
 
     filter(options: LocatorFilter): Locator {
@@ -476,19 +529,13 @@ export class Locator {
         if (options.hasNotText !== undefined) f.hasNotText = Locator._serText(options.hasNotText);
         if (options.has)    f.hasSteps    = options.has._steps;
         if (options.hasNot) f.hasNotSteps = options.hasNot._steps;
-        return new Locator(this.session, [...this._steps, f], this.defaultTimeout, this._expectTimeout, this._stepReporter);
+        return new Locator(this.session, [...this._steps, f], this.defaultTimeout, this._expectTimeout, this._stepReporter, this._page);
     }
 
     async all(): Promise<Locator[]> {
         const count = await this.session.sendCommand<number>({ type: 'count', steps: this._steps });
         return Array.from({ length: count }, (_, i) =>
-            new Locator(
-                this.session,
-                [...this._steps, { kind: 'nth', index: i }],
-                this.defaultTimeout,
-                this._expectTimeout,
-                this._stepReporter,
-            )
+            new Locator(this.session, [...this._steps, { kind: 'nth', index: i }], this.defaultTimeout, this._expectTimeout, this._stepReporter, this._page)
         );
     }
 
@@ -528,28 +575,75 @@ export class Locator {
     // -------------------------------------------------------------------------
 
     and(other: Locator): Locator {
-        return new Locator(
-            this.session,
-            [...this._steps, { kind: 'and', steps: other._steps }],
-            this.defaultTimeout,
-            this._expectTimeout,
-            this._stepReporter,
-        );
+        return new Locator(this.session, [...this._steps, { kind: 'and', steps: other._steps }], this.defaultTimeout, this._expectTimeout, this._stepReporter, this._page);
     }
 
     or(other: Locator): Locator {
-        return new Locator(
-            this.session,
-            [...this._steps, { kind: 'or', steps: other._steps }],
-            this.defaultTimeout,
-            this._expectTimeout,
-            this._stepReporter,
-        );
+        return new Locator(this.session, [...this._steps, { kind: 'or', steps: other._steps }], this.defaultTimeout, this._expectTimeout, this._stepReporter, this._page);
     }
 
     // -------------------------------------------------------------------------
     // Drag
     // -------------------------------------------------------------------------
+
+    async selectText(options?: { timeout?: number }): Promise<void> {
+        return this._runStep(`${this._description()}.selectText()`, async () => {
+            await this._waitForActionable(options?.timeout ?? this.defaultTimeout);
+            await this.session.sendCommand({
+                type: 'evaluate',
+                expression: `(function() {
+                    var els = resolveSteps(${JSON.stringify(this._steps)});
+                    var el = els[0];
+                    if (!el) throw new Error('Element not found for selectText');
+                    if (typeof el.select === 'function') {
+                        el.select();
+                    } else {
+                        var range = document.createRange();
+                        range.selectNodeContents(el);
+                        var sel = window.getSelection();
+                        if (sel) { sel.removeAllRanges(); sel.addRange(range); }
+                    }
+                })()`,
+            });
+        });
+    }
+
+    async setInputFiles(
+        files: string | string[] | FilePayload | FilePayload[],
+        options?: { timeout?: number }
+    ): Promise<void> {
+        return this._runStep(`${this._description()}.setInputFiles(...)`, async () => {
+            const arr = Array.isArray(files) ? files : [files];
+            const payloads = arr.map(f => {
+                if (typeof f === 'string') {
+                    const buf = readFileSync(f);
+                    const name = f.split('/').pop() ?? f;
+                    return { name, mimeType: 'application/octet-stream', base64: buf.toString('base64') };
+                }
+                return { name: f.name, mimeType: f.mimeType, base64: f.buffer.toString('base64') };
+            });
+            await this.waitFor({ timeout: options?.timeout ?? this.defaultTimeout });
+            await this.session.sendCommand({
+                type: 'evaluate',
+                expression: `(function() {
+                    var payloads = ${JSON.stringify(payloads)};
+                    var els = resolveSteps(${JSON.stringify(this._steps)});
+                    var el = els[0];
+                    if (!el) throw new Error('Element not found for setInputFiles');
+                    var dt = new DataTransfer();
+                    payloads.forEach(function(p) {
+                        var bytes = atob(p.base64);
+                        var arr = new Uint8Array(bytes.length);
+                        for (var i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+                        dt.items.add(new File([arr], p.name, { type: p.mimeType }));
+                    });
+                    Object.defineProperty(el, 'files', { value: dt.files, configurable: true });
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                })()`,
+            });
+        });
+    }
 
     async dragTo(target: Locator, options?: { timeout?: number }): Promise<void> {
         return this._runStep(`${this._description()}.dragTo(${target._description()})`, async () => {
@@ -562,9 +656,40 @@ export class Locator {
         });
     }
 
+    async drop(options?: { timeout?: number }): Promise<void> {
+        return this._runStep(`${this._description()}.drop()`, async () => {
+            await this._waitForActionable(options?.timeout ?? this.defaultTimeout);
+            await this.session.sendCommand({
+                type: 'evaluate',
+                expression: `(function() {
+                    var els = resolveSteps(${JSON.stringify(this._steps)});
+                    var el = els[0];
+                    if (!el) throw new Error('Element not found for drop');
+                    ['dragenter', 'dragover', 'drop'].forEach(function(type) {
+                        el.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true }));
+                    });
+                })()`,
+            });
+        });
+    }
+
     // -------------------------------------------------------------------------
     // Aria snapshot
     // -------------------------------------------------------------------------
+
+    async highlight(): Promise<void> {
+        await this.session.sendCommand({
+            type: 'evaluate',
+            expression: `(function() {
+                var els = resolveSteps(${JSON.stringify(this._steps)});
+                els.forEach(function(el) {
+                    var prev = el.style.outline;
+                    el.style.outline = '2px solid crimson';
+                    setTimeout(function() { el.style.outline = prev; }, 2000);
+                });
+            })()`,
+        });
+    }
 
     async ariaSnapshot(options?: { timeout?: number }): Promise<string> {
         return this.session.sendCommand<string>({

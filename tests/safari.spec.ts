@@ -767,6 +767,67 @@ test.describe('page events', () => {
     });
 });
 
+test.describe('page.setViewportSize', () => {
+    test.beforeEach(async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+    });
+
+    test('viewportSize returns positive width and height', async ({ safariPage: page }) => {
+        const size = await page.viewportSize();
+        expect(size.width).toBeGreaterThan(0);
+        expect(size.height).toBeGreaterThan(0);
+    });
+
+    test('injects meta viewport tag with specified width', async ({ safariPage: page }) => {
+        await page.setViewportSize({ width: 375, height: 812 });
+
+        const content = await page.evaluate(() => {
+            const meta = document.querySelector('meta[name="viewport"]');
+            return meta?.getAttribute('content') ?? null;
+        });
+
+        expect(content).toContain('width=375');
+    });
+
+    test('injects constraining style tag with specified dimensions', async ({ safariPage: page }) => {
+        await page.setViewportSize({ width: 1920, height: 1080 });
+
+        const styleText = await page.evaluate(() =>
+            document.getElementById('__hh_viewport__')?.textContent ?? null
+        );
+
+        expect(styleText).toContain('1920px');
+        expect(styleText).toContain('1080px');
+    });
+
+    test('repeated calls update constraints without duplicating elements', async ({ safariPage: page }) => {
+        await page.setViewportSize({ width: 375, height: 667 });
+        await page.setViewportSize({ width: 1280, height: 800 });
+
+        const metaCount = await page.evaluate(() =>
+            document.querySelectorAll('meta[name="viewport"]').length
+        );
+        const styleCount = await page.evaluate(() =>
+            document.querySelectorAll('#__hh_viewport__').length
+        );
+
+        expect(metaCount).toBe(1);
+        expect(styleCount).toBe(1);
+    });
+
+    test('second call overrides first width constraint', async ({ safariPage: page }) => {
+        await page.setViewportSize({ width: 375, height: 667 });
+        await page.setViewportSize({ width: 1280, height: 800 });
+
+        const content = await page.evaluate(() =>
+            document.querySelector('meta[name="viewport"]')?.getAttribute('content') ?? null
+        );
+
+        expect(content).toContain('width=1280');
+        expect(content).not.toContain('width=375');
+    });
+});
+
 test.describe('has-text', () => {
     test('has-text', async ({ safariPage: page }) => {
         await page.goto('https://www.saucedemo.com/');

@@ -76,6 +76,9 @@ export interface ScreenshotOptions {
     quality?: number;
 }
 
+export type FilePayload = { name: string; mimeType: string; buffer: Buffer };
+export type FileInput = string | string[] | FilePayload | FilePayload[];
+
 const REQUEST_EVENTS = new Set(['request', 'response', 'requestfinished', 'requestfailed']);
 
 interface RouteEntry {
@@ -151,9 +154,10 @@ export class Page extends EventEmitter {
     private navigationTimeout: number;
     readonly expectTimeout: number;
     private readonly _routes: RouteEntry[] = [];
-    private readonly _locatorHandlerIntervals: ReturnType<typeof setInterval>[] = [];
+    private readonly _locatorHandlers = new Map<Locator, ReturnType<typeof setInterval>>();
     private readonly _requestInfoMap = new Map<string, RequestInfo>();
     private _requestHookSetup = false;
+    private _closed = false;
 
     constructor(
         private readonly proxy: Proxy,
@@ -317,14 +321,43 @@ export class Page extends EventEmitter {
         return this.session.sendCommand<string>({ type: 'content' });
     }
 
+    async setContent(html: string, options?: { timeout?: number; waitUntil?: WaitUntilState }): Promise<void> {
+        return this._stepReporter('page.setContent()', async () => {
+            await this.session.sendCommand({
+                type: 'evaluate',
+                expression: `document.open(); document.write(${JSON.stringify(html)}); document.close();`,
+            });
+            await this.waitForLoadState(options?.waitUntil ?? 'load');
+        });
+    }
+
     async ariaSnapshot(options?: { timeout?: number }): Promise<string> {
         return this.session.sendCommand<string>({ type: 'ariaSnapshot', timeout: options?.timeout ?? this.defaultTimeout });
+    }
+
+    async viewportSize(): Promise<{ width: number; height: number }> {
+        return this.evaluate<{ width: number; height: number }>(
+            '({ width: window.innerWidth, height: window.innerHeight })'
+        );
+    }
+
+    async setViewportSize(size: { width: number; height: number }): Promise<void> {
+        return this._stepReporter(`page.setViewportSize(${JSON.stringify(size)})`, async () => {
+            await this.evaluate(`(function() {
+                var meta = document.querySelector('meta[name="viewport"]');
+                if (!meta) { meta = document.createElement('meta'); meta.name = 'viewport'; document.head.appendChild(meta); }
+                meta.content = 'width=${size.width},initial-scale=1';
+                var style = document.getElementById('__hh_viewport__');
+                if (!style) { style = document.createElement('style'); style.id = '__hh_viewport__'; document.head.appendChild(style); }
+                style.textContent = 'html,body{width:${size.width}px!important;height:${size.height}px!important;overflow:auto!important;}';
+            })()`);
+        });
     }
 
     // --- Locators ---
 
     locator(selector: string): Locator {
-        return Locator.fromSelector(this.session, selector, this.defaultTimeout, this.expectTimeout, this._stepReporter);
+        return Locator.fromSelector(this.session, selector, this.defaultTimeout, this.expectTimeout, this._stepReporter, this);
     }
 
     getByRole(_role: string, options?: { name?: string | RegExp }): Locator {
@@ -352,10 +385,28 @@ export class Page extends EventEmitter {
         return this.locator(`[data-testid="${testId}"]`);
     }
 
+    getByAltText(text: string | RegExp): Locator {
+        const textStr = typeof text === 'string' ? text : text.source;
+        return this.locator(`[alt="${textStr}"], [alt*="${textStr}"]`);
+    }
+
+    getByTitle(text: string | RegExp): Locator {
+        const textStr = typeof text === 'string' ? text : text.source;
+        return this.locator(`[title="${textStr}"]`);
+    }
+
     // --- Direct element actions ---
 
     async click(selector: string, options?: { timeout?: number }): Promise<void> {
         await this.locator(selector).click(options);
+    }
+
+    async dblclick(selector: string, options?: { timeout?: number }): Promise<void> {
+        await this.locator(selector).dblclick(options);
+    }
+
+    async tap(selector: string, options?: { timeout?: number }): Promise<void> {
+        await this.locator(selector).tap(options);
     }
 
     async fill(selector: string, value: string, options?: { timeout?: number }): Promise<void> {
@@ -364,6 +415,10 @@ export class Page extends EventEmitter {
 
     async type(selector: string, text: string, options?: { timeout?: number }): Promise<void> {
         await this.locator(selector).type(text, options);
+    }
+
+    async press(selector: string, key: string, options?: { timeout?: number }): Promise<void> {
+        await this.locator(selector).press(key, options);
     }
 
     async selectOption(selector: string, values: string | string[]): Promise<string[]> {
@@ -378,12 +433,111 @@ export class Page extends EventEmitter {
         await this.locator(selector).uncheck();
     }
 
+    async setChecked(selector: string, checked: boolean, options?: { timeout?: number }): Promise<void> {
+        await this.locator(selector).setChecked(checked, options);
+    }
+
+    async setInputFiles(
+        selector: string,
+        files: FileInput,
+        options?: { timeout?: number }
+    ): Promise<void> {
+        return this._stepReporter(`page.setInputFiles(${JSON.stringify(selector)})`, async () => {
+            const arr = Array.isArray(files) ? files : [files];
+            const payloads: FilePayload[] = arr.map(f => {
+                if (typeof f === 'string') {
+                    const buf = readFileSync(f);
+                    const name = f.split('/').pop() ?? f;
+                    return { name, mimeType: 'application/octet-stream', buffer: buf };
+                }
+                return f;
+            });
+            const serialized = payloads.map(p => ({
+                name: p.name,
+                mimeType: p.mimeType,
+                base64: p.buffer.toString('base64'),
+            }));
+            const loc = this.locator(selector);
+            await loc.waitFor({ timeout: options?.timeout ?? this.defaultTimeout });
+            await this.session.sendCommand({
+                type: 'evaluate',
+                expression: `(function() {
+                    var payloads = ${JSON.stringify(serialized)};
+                    var els = resolveSteps(${JSON.stringify(loc['_steps'])});
+                    var el = els[0];
+                    if (!el) throw new Error('Element not found for setInputFiles');
+                    var dt = new DataTransfer();
+                    payloads.forEach(function(p) {
+                        var bytes = atob(p.base64);
+                        var arr = new Uint8Array(bytes.length);
+                        for (var i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+                        var file = new File([arr], p.name, { type: p.mimeType });
+                        dt.items.add(file);
+                    });
+                    Object.defineProperty(el, 'files', { value: dt.files, configurable: true });
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                })()`,
+            });
+        });
+    }
+
     async hover(selector: string, options?: { timeout?: number }): Promise<void> {
         await this.locator(selector).hover(options);
     }
 
     async focus(selector: string): Promise<void> {
         await this.locator(selector).focus();
+    }
+
+    // --- Direct element queries ---
+
+    async getAttribute(selector: string, name: string): Promise<string | null> {
+        return this.locator(selector).getAttribute(name);
+    }
+
+    async textContent(selector: string): Promise<string | null> {
+        return this.locator(selector).textContent();
+    }
+
+    async innerHTML(selector: string): Promise<string> {
+        return this.locator(selector).innerHTML();
+    }
+
+    async innerText(selector: string): Promise<string> {
+        return this.locator(selector).innerText();
+    }
+
+    async inputValue(selector: string): Promise<string> {
+        return this.locator(selector).inputValue();
+    }
+
+    async isVisible(selector: string): Promise<boolean> {
+        return this.locator(selector).isVisible();
+    }
+
+    async isHidden(selector: string): Promise<boolean> {
+        return this.locator(selector).isHidden();
+    }
+
+    async isEnabled(selector: string): Promise<boolean> {
+        return this.locator(selector).isEnabled();
+    }
+
+    async isDisabled(selector: string): Promise<boolean> {
+        return this.locator(selector).isDisabled();
+    }
+
+    async isChecked(selector: string): Promise<boolean> {
+        return this.locator(selector).isChecked();
+    }
+
+    async isEditable(selector: string): Promise<boolean> {
+        return this.locator(selector).isEditable();
+    }
+
+    isClosed(): boolean {
+        return this._closed;
     }
 
     // --- Waiting ---
@@ -415,6 +569,13 @@ export class Page extends EventEmitter {
                 window.addEventListener(${JSON.stringify(eventName)}, resolve, { once: true });
             })`,
         });
+    }
+
+    async waitForNavigation(options?: { timeout?: number; waitUntil?: WaitUntilState }): Promise<void> {
+        const timeout = options?.timeout ?? this.navigationTimeout;
+        (this.session as unknown as { isReady: boolean }).isReady = false;
+        await this.session.waitForReady(timeout);
+        await this.waitForLoadState(options?.waitUntil ?? 'load');
     }
 
     async waitForURL(url: string | RegExp, options?: { timeout?: number }): Promise<void> {
@@ -589,6 +750,10 @@ export class Page extends EventEmitter {
         this._routes.push({ pattern, rule, handler });
     }
 
+    async unrouteAll(): Promise<void> {
+        await this.unroute();
+    }
+
     async unroute(pattern?: UrlPattern, handler?: RouteHandler): Promise<void> {
         if (pattern === undefined) {
             for (const entry of this._routes) {
@@ -628,7 +793,15 @@ export class Page extends EventEmitter {
                 }
             } catch { running = false; }
         }, 500);
-        this._locatorHandlerIntervals.push(interval);
+        this._locatorHandlers.set(locator, interval);
+    }
+
+    async removeLocatorHandler(locator: Locator): Promise<void> {
+        const interval = this._locatorHandlers.get(locator);
+        if (interval !== undefined) {
+            clearInterval(interval);
+            this._locatorHandlers.delete(locator);
+        }
     }
 
     // --- Script / style injection ---
@@ -740,8 +913,10 @@ export class Page extends EventEmitter {
     // --- Lifecycle ---
 
     async close(): Promise<void> {
-        for (const interval of this._locatorHandlerIntervals) clearInterval(interval);
-        this._locatorHandlerIntervals.length = 0;
+        if (this._closed) return;
+        this._closed = true;
+        for (const interval of this._locatorHandlers.values()) clearInterval(interval);
+        this._locatorHandlers.clear();
         this.emit('close');
         this.removeAllListeners();
         this.proxy.closeSession(this.session);
