@@ -766,3 +766,25 @@ test.describe('page events', () => {
         expect(finishedUrls.some(u => u.includes('/api/evt-fin'))).toBe(true);
     });
 });
+
+test.describe('has-text', () => {
+    test('completes full checkout as standard_user', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+
+        await page.fill('#user-name', 'standard_user');
+        await page.fill('#password', 'secret_sauce');
+        await page.click('#login-button');
+
+        await expect(page.locator('.inventory_list')).toBeVisible({ timeout: 10000 });
+
+        const inventoryItem = page.locator('.inventory_item');
+        await inventoryItem.filter({ hasText: 'Sauce Labs Backpack' }).locator('button').click();
+        await inventoryItem.filter({ hasText: 'Sauce Labs Bike Light' }).locator('button').click();
+        await inventoryItem.filter({ hasText: 'Sauce Labs Bolt T-Shirt' }).locator('button').click();
+        await inventoryItem.filter({ hasText: 'Sauce Labs Fleece Jacket' }).locator('button').click();
+        await inventoryItem.filter({ hasText: 'Sauce Labs Onesie' }).locator('button').click();
+        await inventoryItem.filter({ hasText: 'Test.allTheThings() T-Shirt (Red)' }).locator('button').click();
+
+        await expect(page.locator('.shopping_cart_badge')).toHaveText('6');
+    });
+});

@@ -16,17 +16,64 @@ type SerializedText = string | { source: string; flags: string };
 export class Locator {
     readonly selector: string;
     readonly _expectTimeout: number;
+    private readonly _filter?: LocatorFilter;
 
     constructor(
         private readonly session: BridgeSession,
         selector: string,
         private readonly defaultTimeout: number = 30000,
-        private readonly _filter?: LocatorFilter,
+        filter?: LocatorFilter,
         private readonly _nth?: number,
         _expectTimeout: number = 5000,
     ) {
-        this.selector = selector;
+        const parsed = Locator._parseHasTextPseudo(selector);
+        this.selector = parsed.cleanSelector;
         this._expectTimeout = _expectTimeout;
+
+        const hasParsed = parsed.hasText !== undefined || parsed.hasNotText !== undefined;
+        this._filter = hasParsed
+            ? { hasText: parsed.hasText, hasNotText: parsed.hasNotText, ...filter }
+            : filter;
+    }
+
+    // Strips :has-text(...) and :has-not-text(...) Playwright pseudo-classes from a selector
+    // string and returns the clean CSS selector together with the extracted text filters.
+    // Supports quoted strings ("..." / '...') and regex literals (/pattern/flags).
+    private static _parseHasTextPseudo(selector: string): {
+        cleanSelector: string;
+        hasText?: string | RegExp;
+        hasNotText?: string | RegExp;
+    } {
+        let s = selector;
+        let hasText: string | RegExp | undefined;
+        let hasNotText: string | RegExp | undefined;
+
+        // Matches the argument of :has-text(...) / :has-not-text(...)
+        //   group 1: double-quoted string content
+        //   group 2: single-quoted string content
+        //   group 3: regex literal including slashes and flags
+        const arg = String.raw`\(\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|(\/(?:[^\/\\]|\\.)*\/[gimsuy]*))\s*\)`;
+
+        s = s.replace(new RegExp(`:has-not-text${arg}`, 'g'), (_, dq, sq, rx) => {
+            hasNotText = rx !== undefined
+                ? Locator._parseRegexLiteral(rx)
+                : (dq ?? sq ?? '').replace(/\\(.)/g, '$1');
+            return '';
+        });
+
+        s = s.replace(new RegExp(`:has-text${arg}`, 'g'), (_, dq, sq, rx) => {
+            hasText = rx !== undefined
+                ? Locator._parseRegexLiteral(rx)
+                : (dq ?? sq ?? '').replace(/\\(.)/g, '$1');
+            return '';
+        });
+
+        return { cleanSelector: s.trim() || '*', hasText, hasNotText };
+    }
+
+    private static _parseRegexLiteral(literal: string): RegExp {
+        const m = literal.match(/^\/([\s\S]*)\/([\w]*)$/);
+        return m ? new RegExp(m[1], m[2]) : new RegExp(literal);
     }
 
     private get _cssSel(): string {
@@ -436,6 +483,17 @@ export class Locator {
             type: 'allInnerTexts',
             selector: this._cssSel,
             ...this._filterExtras(),
+        });
+    }
+
+    // --- Aria snapshot ---
+
+    async ariaSnapshot(options?: { timeout?: number }): Promise<string> {
+        return this.session.sendCommand<string>({
+            type: 'ariaSnapshot',
+            selector: this._cssSel,
+            nthOfAll: await this._nthForCmd(),
+            timeout: options?.timeout ?? this.defaultTimeout,
         });
     }
 

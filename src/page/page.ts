@@ -305,6 +305,10 @@ export class Page extends EventEmitter {
         return this.session.sendCommand<string>({ type: 'content' });
     }
 
+    async ariaSnapshot(options?: { timeout?: number }): Promise<string> {
+        return this.session.sendCommand<string>({ type: 'ariaSnapshot', timeout: options?.timeout ?? this.defaultTimeout });
+    }
+
     // --- Locators ---
 
     locator(selector: string): Locator {
@@ -314,18 +318,18 @@ export class Page extends EventEmitter {
     getByRole(_role: string, options?: { name?: string | RegExp }): Locator {
         if (options?.name) {
             const name = typeof options.name === 'string' ? options.name : options.name.source;
-            return this.locator(`[role="${_role}"][aria-label*="${name}"], [role="${_role}"]:contains("${name}")`);
+            return this.locator(`[role="${_role}"][aria-label*="${name}"], [role="${_role}"]:has-text("${name}")`);
         }
         return this.locator(`[role="${_role}"]`);
     }
 
     getByText(text: string | RegExp): Locator {
         const textStr = typeof text === 'string' ? text : text.source;
-        return this.locator(`*:contains("${textStr}")`);
+        return this.locator(`*:has-text("${textStr}")`);
     }
 
     getByLabel(text: string): Locator {
-        return this.locator(`[aria-label="${text}"], label:contains("${text}") + input, label:contains("${text}") ~ input`);
+        return this.locator(`[aria-label="${text}"], label:has-text("${text}") + input, label:has-text("${text}") ~ input`);
     }
 
     getByPlaceholder(placeholder: string): Locator {
