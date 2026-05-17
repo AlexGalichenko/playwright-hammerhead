@@ -770,7 +770,7 @@ export class BridgeSession extends Session {
                         if (!cmd.selector) {
                             var bodyKids = '';
                             for (var i = 0; i < root.childNodes.length; i++) bodyKids += buildAriaSnapshot(root.childNodes[i], '  ');
-                            return '- document:\n' + bodyKids;
+                            return '- document:\\n' + bodyKids;
                         }
                         return buildAriaSnapshot(root, '');
                     });
