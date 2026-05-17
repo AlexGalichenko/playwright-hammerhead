@@ -1,5 +1,6 @@
 import { expect as baseExpect } from '@playwright/test';
 import type { Locator } from './page/locator';
+import type { Page } from './page/page';
 
 type MatcherOptions = { timeout?: number };
 
@@ -182,6 +183,48 @@ const locatorMatchers = {
                 `expected locator to${this.isNot ? ' not' : ''} have count ${expected}, received ${actual}`,
         };
     },
+
+    async toHaveTitle(
+        this: MatcherContext,
+        page: Page,
+        expected: string | RegExp,
+        options?: MatcherOptions
+    ): MatcherResult {
+        const timeout = options?.timeout ?? page.expectTimeout;
+        let actual = '';
+        const matches = (t: string) =>
+            typeof expected === 'string' ? t === expected : expected.test(t);
+        const pass = await waitForCondition(async () => {
+            actual = await page.title();
+            return matches(actual);
+        }, !this.isNot, timeout);
+        return {
+            pass,
+            message: () =>
+                `expected page to${this.isNot ? ' not' : ''} have title ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}`,
+        };
+    },
+
+    async toHaveURL(
+        this: MatcherContext,
+        page: Page,
+        expected: string | RegExp,
+        options?: MatcherOptions
+    ): MatcherResult {
+        const timeout = options?.timeout ?? page.expectTimeout;
+        let actual = '';
+        const matches = (u: string) =>
+            typeof expected === 'string' ? u.includes(expected) : expected.test(u);
+        const pass = await waitForCondition(async () => {
+            actual = await page.url();
+            return matches(actual);
+        }, !this.isNot, timeout);
+        return {
+            pass,
+            message: () =>
+                `expected page to${this.isNot ? ' not' : ''} have URL ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}`,
+        };
+    },
 };
 
 export const expect = baseExpect.extend(locatorMatchers);
@@ -199,5 +242,7 @@ declare module '@playwright/test' {
         toHaveValue(expected: string | RegExp, options?: MatcherOptions): R;
         toHaveAttribute(name: string, expected: string | RegExp, options?: MatcherOptions): R;
         toHaveCount(expected: number, options?: MatcherOptions): R;
+        toHaveTitle(expected: string | RegExp, options?: MatcherOptions): R;
+        toHaveURL(expected: string | RegExp, options?: MatcherOptions): R;
     }
 }
