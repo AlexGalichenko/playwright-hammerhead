@@ -212,6 +212,14 @@ export class BridgeSession extends Session {
 
     private _domHelperFns(): string {
         return `
+    function mouseInits(el) {
+        var r = el.getBoundingClientRect();
+        var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+        var m = { bubbles: true, cancelable: true, clientX: cx, clientY: cy, screenX: cx, screenY: cy, button: 0, buttons: 1 };
+        var p = Object.assign({}, m, { pointerType: 'mouse', isPrimary: true, pointerId: 1 });
+        return { m: m, p: p };
+    }
+
     function waitForSelector(selector, timeoutMs, nthOfAll) {
         timeoutMs = timeoutMs != null ? timeoutMs : 30000;
         function findEl() { return nthOfAll !== undefined ? (document.querySelectorAll(selector)[nthOfAll] || null) : document.querySelector(selector); }
@@ -262,11 +270,49 @@ export class BridgeSession extends Session {
                 // --- Single-element writes ---
                 case 'click':
                     return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
-                        el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return null;
+                        var i = mouseInits(el);
+                        var up = Object.assign({}, i.m, { buttons: 0 });
+                        var pup = Object.assign({}, i.p, { buttons: 0 });
+                        el.dispatchEvent(new PointerEvent('pointerover',  i.p));
+                        el.dispatchEvent(new MouseEvent('mouseover',      i.m));
+                        el.dispatchEvent(new PointerEvent('pointerenter', Object.assign({}, i.p, { bubbles: false })));
+                        el.dispatchEvent(new MouseEvent('mouseenter',     Object.assign({}, i.m, { bubbles: false })));
+                        el.dispatchEvent(new PointerEvent('pointermove',  i.p));
+                        el.dispatchEvent(new MouseEvent('mousemove',      i.m));
+                        el.dispatchEvent(new PointerEvent('pointerdown',  i.p));
+                        el.dispatchEvent(new MouseEvent('mousedown',      i.m));
+                        el.focus();
+                        el.dispatchEvent(new PointerEvent('pointerup',    pup));
+                        el.dispatchEvent(new MouseEvent('mouseup',        up));
+                        el.dispatchEvent(new MouseEvent('click',          Object.assign({}, up, { detail: 1 })));
+                        return null;
                     });
                 case 'dblclick':
                     return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
-                        el.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true })); return null;
+                        var i = mouseInits(el);
+                        var up = Object.assign({}, i.m, { buttons: 0 });
+                        var pup = Object.assign({}, i.p, { buttons: 0 });
+                        el.dispatchEvent(new PointerEvent('pointerover',  i.p));
+                        el.dispatchEvent(new MouseEvent('mouseover',      i.m));
+                        el.dispatchEvent(new PointerEvent('pointerenter', Object.assign({}, i.p, { bubbles: false })));
+                        el.dispatchEvent(new MouseEvent('mouseenter',     Object.assign({}, i.m, { bubbles: false })));
+                        el.dispatchEvent(new PointerEvent('pointermove',  i.p));
+                        el.dispatchEvent(new MouseEvent('mousemove',      i.m));
+                        // first click
+                        el.dispatchEvent(new PointerEvent('pointerdown',  i.p));
+                        el.dispatchEvent(new MouseEvent('mousedown',      i.m));
+                        el.focus();
+                        el.dispatchEvent(new PointerEvent('pointerup',    pup));
+                        el.dispatchEvent(new MouseEvent('mouseup',        up));
+                        el.dispatchEvent(new MouseEvent('click',          Object.assign({}, up, { detail: 1 })));
+                        // second click
+                        el.dispatchEvent(new PointerEvent('pointerdown',  i.p));
+                        el.dispatchEvent(new MouseEvent('mousedown',      i.m));
+                        el.dispatchEvent(new PointerEvent('pointerup',    pup));
+                        el.dispatchEvent(new MouseEvent('mouseup',        up));
+                        el.dispatchEvent(new MouseEvent('click',          Object.assign({}, up, { detail: 2 })));
+                        el.dispatchEvent(new MouseEvent('dblclick',       Object.assign({}, up, { detail: 2 })));
+                        return null;
                     });
                 case 'fill':
                     return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
@@ -322,8 +368,15 @@ export class BridgeSession extends Session {
                     });
                 case 'hover':
                     return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
-                        el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-                        el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true, cancelable: false }));
+                        var i = mouseInits(el);
+                        var nm = Object.assign({}, i.m, { buttons: 0 });
+                        var np = Object.assign({}, i.p, { buttons: 0 });
+                        el.dispatchEvent(new PointerEvent('pointerover',  np));
+                        el.dispatchEvent(new MouseEvent('mouseover',      nm));
+                        el.dispatchEvent(new PointerEvent('pointerenter', Object.assign({}, np, { bubbles: false })));
+                        el.dispatchEvent(new MouseEvent('mouseenter',     Object.assign({}, nm, { bubbles: false })));
+                        el.dispatchEvent(new PointerEvent('pointermove',  np));
+                        el.dispatchEvent(new MouseEvent('mousemove',      nm));
                         return null;
                     });
                 case 'focus':
@@ -432,7 +485,19 @@ export class BridgeSession extends Session {
                 case 'mouseClick':
                     return Promise.resolve().then(function() {
                         var el = document.elementFromPoint(cmd.x, cmd.y);
-                        if (el) el.click(); return null;
+                        if (!el) return null;
+                        var cx = cmd.x, cy = cmd.y;
+                        var m = { bubbles: true, cancelable: true, clientX: cx, clientY: cy, screenX: cx, screenY: cy, button: 0, buttons: 1 };
+                        var p = Object.assign({}, m, { pointerType: 'mouse', isPrimary: true, pointerId: 1 });
+                        var up = Object.assign({}, m, { buttons: 0 });
+                        var pup = Object.assign({}, p, { buttons: 0 });
+                        el.dispatchEvent(new PointerEvent('pointerdown', p));
+                        el.dispatchEvent(new MouseEvent('mousedown',     m));
+                        el.focus();
+                        el.dispatchEvent(new PointerEvent('pointerup',   pup));
+                        el.dispatchEvent(new MouseEvent('mouseup',       up));
+                        el.dispatchEvent(new MouseEvent('click',         Object.assign({}, up, { detail: 1 })));
+                        return null;
                     });
 
                 // --- Multi-element reads ---

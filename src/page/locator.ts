@@ -2,7 +2,7 @@ import { writeFileSync } from 'fs';
 import { BridgeSession } from '../session/bridge-session';
 import { getModernScreenshotCode } from '../utils/screenshot';
 
-export type LocatorState = 'visible' | 'hidden' | 'attached' | 'detached';
+export type LocatorState = 'visible' | 'hidden' | 'attached' | 'detached' | 'actionable';
 
 export interface LocatorFilter {
     hasText?: string | RegExp;
@@ -59,22 +59,40 @@ export class Locator {
         return indices[0];
     }
 
+    private async _waitForActionable(timeout: number): Promise<void> {
+        const deadline = Date.now() + timeout;
+        while (Date.now() < deadline) {
+            try {
+                const [visible, enabled] = await Promise.all([this.isVisible(), this.isEnabled()]);
+                if (visible && enabled) return;
+            } catch {
+                // element not yet in DOM or page still loading — keep polling
+            }
+            await new Promise(r => setTimeout(r, 50));
+        }
+        throw new Error(`Timeout ${timeout}ms waiting for '${this.selector}' to be actionable`);
+    }
+
     // --- Clicks ---
 
     async click(options?: { timeout?: number }): Promise<void> {
+        const timeout = options?.timeout ?? this.defaultTimeout;
+        await this._waitForActionable(timeout);
         await this.session.sendCommand({
             type: 'click',
             selector: this._cssSel,
-            timeout: options?.timeout ?? this.defaultTimeout,
+            timeout,
             nthOfAll: await this._nthForCmd(),
         });
     }
 
     async dblclick(options?: { timeout?: number }): Promise<void> {
+        const timeout = options?.timeout ?? this.defaultTimeout;
+        await this._waitForActionable(timeout);
         await this.session.sendCommand({
             type: 'dblclick',
             selector: this._cssSel,
-            timeout: options?.timeout ?? this.defaultTimeout,
+            timeout,
             nthOfAll: await this._nthForCmd(),
         });
     }
@@ -82,21 +100,25 @@ export class Locator {
     // --- Typing ---
 
     async fill(value: string, options?: { timeout?: number }): Promise<void> {
+        const timeout = options?.timeout ?? this.defaultTimeout;
+        await this._waitForActionable(timeout);
         await this.session.sendCommand({
             type: 'fill',
             selector: this._cssSel,
             value,
-            timeout: options?.timeout ?? this.defaultTimeout,
+            timeout,
             nthOfAll: await this._nthForCmd(),
         });
     }
 
     async type(text: string, options?: { timeout?: number; delay?: number }): Promise<void> {
+        const timeout = options?.timeout ?? this.defaultTimeout;
+        await this._waitForActionable(timeout);
         await this.session.sendCommand({
             type: 'type',
             selector: this._cssSel,
             text,
-            timeout: options?.timeout ?? this.defaultTimeout,
+            timeout,
             nthOfAll: await this._nthForCmd(),
         });
     }
@@ -115,11 +137,13 @@ export class Locator {
     }
 
     async press(key: string, options?: { timeout?: number }): Promise<void> {
+        const timeout = options?.timeout ?? this.defaultTimeout;
+        await this._waitForActionable(timeout);
         await this.session.sendCommand({
             type: 'press',
             selector: this._cssSel,
             key,
-            timeout: options?.timeout ?? this.defaultTimeout,
+            timeout,
             nthOfAll: await this._nthForCmd(),
         });
     }
@@ -217,10 +241,12 @@ export class Locator {
     // --- Actions ---
 
     async hover(options?: { timeout?: number }): Promise<void> {
+        const timeout = options?.timeout ?? this.defaultTimeout;
+        await this._waitForActionable(timeout);
         await this.session.sendCommand({
             type: 'hover',
             selector: this._cssSel,
-            timeout: options?.timeout ?? this.defaultTimeout,
+            timeout,
             nthOfAll: await this._nthForCmd(),
         });
     }
@@ -263,29 +289,35 @@ export class Locator {
     }
 
     async check(options?: { timeout?: number }): Promise<void> {
+        const timeout = options?.timeout ?? this.defaultTimeout;
+        await this._waitForActionable(timeout);
         await this.session.sendCommand({
             type: 'check',
             selector: this._cssSel,
-            timeout: options?.timeout ?? this.defaultTimeout,
+            timeout,
             nthOfAll: await this._nthForCmd(),
         });
     }
 
     async uncheck(options?: { timeout?: number }): Promise<void> {
+        const timeout = options?.timeout ?? this.defaultTimeout;
+        await this._waitForActionable(timeout);
         await this.session.sendCommand({
             type: 'uncheck',
             selector: this._cssSel,
-            timeout: options?.timeout ?? this.defaultTimeout,
+            timeout,
             nthOfAll: await this._nthForCmd(),
         });
     }
 
     async setChecked(checked: boolean, options?: { timeout?: number }): Promise<void> {
+        const timeout = options?.timeout ?? this.defaultTimeout;
+        await this._waitForActionable(timeout);
         await this.session.sendCommand({
             type: 'setChecked',
             selector: this._cssSel,
             checked,
-            timeout: options?.timeout ?? this.defaultTimeout,
+            timeout,
             nthOfAll: await this._nthForCmd(),
         });
     }
@@ -323,6 +355,8 @@ export class Locator {
                 timeout,
                 nthOfAll: await this._nthForCmd(),
             });
+        } else if (state === 'actionable') {
+            await this._waitForActionable(timeout);
         } else if (state === 'hidden') {
             const deadline = Date.now() + timeout;
             while (Date.now() < deadline) {

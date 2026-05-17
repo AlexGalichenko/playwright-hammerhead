@@ -31,6 +31,9 @@ test.describe('Saucedemo checkout flow', () => {
         await page.click('[data-test="finish"]');
 
         await expect(page.locator('.complete-header')).toHaveText('Thank you for your order!', { timeout: 10000 });
+        await test.info().attach('screenshot.png', {
+            body: await page.screenshot(),
+        });
     });
 });
 
