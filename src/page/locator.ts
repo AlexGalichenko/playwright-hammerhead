@@ -20,17 +20,19 @@ export interface LocatorFilter {
 type SerializedText = string | { source: string; flags: string };
 
 // A selector chain step. Steps are executed sequentially in the browser:
-//   css   — querySelectorAll within current context elements
-//   nth   — pick one element by index (negative counts from end)
+//   css    — querySelectorAll within current context elements
+//   nth    — pick one element by index (negative counts from end)
 //   filter — narrow the set by text / child-locator presence
-//   and   — intersect with an independently-resolved locator
-//   or    — union with an independently-resolved locator
+//   and    — intersect with an independently-resolved locator
+//   or     — union with an independently-resolved locator
+//   iframe — cross into an iframe's contentDocument (used by FrameLocator)
 export type SelectorStep =
     | { kind: 'css';    sel: string }
     | { kind: 'nth';    index: number }
     | { kind: 'filter'; hasText?: SerializedText; hasNotText?: SerializedText; hasSteps?: SelectorStep[]; hasNotSteps?: SelectorStep[] }
     | { kind: 'and';    steps: SelectorStep[] }
-    | { kind: 'or';     steps: SelectorStep[] };
+    | { kind: 'or';     steps: SelectorStep[] }
+    | { kind: 'iframe'; sel: string; index?: number };
 
 export class Locator {
     readonly _steps: SelectorStep[];
@@ -87,6 +89,11 @@ export class Locator {
                     parts.push(`hasNotText: ${JSON.stringify(t)}`);
                 }
                 result = `${result}.filter({ ${parts.join(', ')} })`;
+            } else if (step.kind === 'iframe') {
+                result = result
+                    ? `${result}.frameLocator(${JSON.stringify(step.sel)})`
+                    : `frameLocator(${JSON.stringify(step.sel)})`;
+                if (step.index !== undefined) result += `.nth(${step.index})`;
             }
         }
         return result || 'locator(*)';
@@ -582,6 +589,17 @@ export class Locator {
         return new Locator(this.session, [...this._steps, { kind: 'or', steps: other._steps }], this.defaultTimeout, this._expectTimeout, this._stepReporter, this._page);
     }
 
+    frameLocator(selector: string): FrameLocator {
+        return new FrameLocator(
+            this.session,
+            [...this._steps, { kind: 'iframe', sel: selector }],
+            this.defaultTimeout,
+            this._expectTimeout,
+            this._stepReporter,
+            this._page,
+        );
+    }
+
     // -------------------------------------------------------------------------
     // Drag
     // -------------------------------------------------------------------------
@@ -733,5 +751,109 @@ export class Locator {
         const buffer = Buffer.from(base64, 'base64');
         if (options?.path) writeFileSync(options.path, buffer);
         return buffer;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FrameLocator — scopes queries to an iframe's content document
+// ─────────────────────────────────────────────────────────────────────────────
+
+export class FrameLocator {
+    constructor(
+        private readonly _session: BridgeSession,
+        readonly _steps: SelectorStep[],
+        private readonly _defaultTimeout: number,
+        private readonly _expectTimeout: number,
+        private readonly _stepReporter: StepReporter = noopReporter,
+        private readonly _page?: Page,
+    ) {}
+
+    // ─── Description ──────────────────────────────────────────────────────────
+
+    _description(): string {
+        let result = '';
+        for (const step of this._steps) {
+            if (step.kind === 'iframe') {
+                result = result
+                    ? `${result}.frameLocator(${JSON.stringify(step.sel)})`
+                    : `frameLocator(${JSON.stringify(step.sel)})`;
+                if (step.index !== undefined) result += `.nth(${step.index})`;
+            }
+        }
+        return result || 'frameLocator(*)';
+    }
+
+    // ─── Index selection ──────────────────────────────────────────────────────
+
+    nth(index: number): FrameLocator {
+        const steps = this._steps.map((s, i) =>
+            i === this._steps.length - 1 && s.kind === 'iframe' ? { ...s, index } : s
+        );
+        return new FrameLocator(this._session, steps, this._defaultTimeout, this._expectTimeout, this._stepReporter, this._page);
+    }
+
+    first(): FrameLocator { return this.nth(0); }
+    last(): FrameLocator  { return this.nth(-1); }
+
+    // ─── Locator factories ────────────────────────────────────────────────────
+
+    locator(selector: string): Locator {
+        const inner = Locator.fromSelector(this._session, selector, this._defaultTimeout, this._expectTimeout);
+        return new Locator(
+            this._session,
+            [...this._steps, ...inner._steps],
+            this._defaultTimeout,
+            this._expectTimeout,
+            this._stepReporter,
+            this._page,
+        );
+    }
+
+    getByRole(role: string, options?: { name?: string | RegExp }): Locator {
+        if (options?.name) {
+            const name = typeof options.name === 'string' ? options.name : options.name.source;
+            return this.locator(`[role="${role}"][aria-label*="${name}"], [role="${role}"]:has-text("${name}")`);
+        }
+        return this.locator(`[role="${role}"]`);
+    }
+
+    getByText(text: string | RegExp): Locator {
+        const t = typeof text === 'string' ? text : text.source;
+        return this.locator(`*:has-text("${t}")`);
+    }
+
+    getByLabel(text: string): Locator {
+        return this.locator(`[aria-label="${text}"], label:has-text("${text}") + input, label:has-text("${text}") ~ input`);
+    }
+
+    getByPlaceholder(placeholder: string): Locator {
+        return this.locator(`[placeholder="${placeholder}"]`);
+    }
+
+    getByTestId(testId: string): Locator {
+        return this.locator(`[data-testid="${testId}"]`);
+    }
+
+    getByAltText(text: string | RegExp): Locator {
+        const t = typeof text === 'string' ? text : text.source;
+        return this.locator(`[alt="${t}"], [alt*="${t}"]`);
+    }
+
+    getByTitle(text: string | RegExp): Locator {
+        const t = typeof text === 'string' ? text : text.source;
+        return this.locator(`[title="${t}"]`);
+    }
+
+    // ─── Nested frame ─────────────────────────────────────────────────────────
+
+    frameLocator(selector: string): FrameLocator {
+        return new FrameLocator(
+            this._session,
+            [...this._steps, { kind: 'iframe', sel: selector }],
+            this._defaultTimeout,
+            this._expectTimeout,
+            this._stepReporter,
+            this._page,
+        );
     }
 }

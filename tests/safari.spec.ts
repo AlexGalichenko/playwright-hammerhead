@@ -996,3 +996,140 @@ test.describe('page.frame', () => {
         expect(page.frame({ name: 'remove-frame' })).toBeNull();
     });
 });
+
+// ── Helper: inject an iframe with given id and HTML content ──────────────────
+async function injectIframeWithContent(
+    page: import('../src').Page,
+    id: string,
+    html: string,
+): Promise<void> {
+    const attached = new Promise<void>(resolve => page.once('frameattached', () => resolve()));
+    await page.evaluate((args: any) => {
+        const f = document.createElement('iframe');
+        f.id = args.id;
+        document.body.appendChild(f);
+        f.contentDocument!.open();
+        f.contentDocument!.write(args.html);
+        f.contentDocument!.close();
+    }, { id, html });
+    await attached;
+}
+
+test.describe('page.frameLocator', () => {
+    test('frameLocator().locator() finds an element inside the iframe', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+        await injectIframeWithContent(page, 'fl-basic', '<button id="btn">Click me</button>');
+
+        const btn = page.frameLocator('#fl-basic').locator('#btn');
+        await expect(btn).toBeVisible();
+    });
+
+    test('frameLocator().locator().textContent() reads iframe text', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+        await injectIframeWithContent(page, 'fl-text', '<span id="msg">Hello iframe</span>');
+
+        const text = await page.frameLocator('#fl-text').locator('#msg').textContent();
+        expect(text).toBe('Hello iframe');
+    });
+
+    test('frameLocator().locator().getAttribute() reads iframe attribute', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+        await injectIframeWithContent(page, 'fl-attr', '<input id="inp" placeholder="type here">');
+
+        const attr = await page.frameLocator('#fl-attr').locator('#inp').getAttribute('placeholder');
+        expect(attr).toBe('type here');
+    });
+
+    test('frameLocator().locator().isVisible() is true for visible iframe element', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+        await injectIframeWithContent(page, 'fl-vis', '<p id="p">Visible</p>');
+
+        const visible = await page.frameLocator('#fl-vis').locator('#p').isVisible();
+        expect(visible).toBe(true);
+    });
+
+    test('frameLocator().locator().isVisible() is false for hidden iframe element', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+        await injectIframeWithContent(page, 'fl-hidden', '<p id="p" style="display:none">Hidden</p>');
+
+        const visible = await page.frameLocator('#fl-hidden').locator('#p').isVisible();
+        expect(visible).toBe(false);
+    });
+
+    test('frameLocator().locator().click() fires click inside the iframe', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+        await injectIframeWithContent(
+            page, 'fl-click',
+            '<button id="btn" onclick="document.getElementById(\'out\').textContent=\'clicked\'">Go</button><span id="out"></span>',
+        );
+
+        await page.frameLocator('#fl-click').locator('#btn').click();
+        const out = await page.frameLocator('#fl-click').locator('#out').textContent();
+        expect(out).toBe('clicked');
+    });
+
+    test('frameLocator().locator().fill() fills an input inside the iframe', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+        await injectIframeWithContent(page, 'fl-fill', '<input id="inp" type="text">');
+
+        await page.frameLocator('#fl-fill').locator('#inp').fill('hello');
+        const val = await page.frameLocator('#fl-fill').locator('#inp').inputValue();
+        expect(val).toBe('hello');
+    });
+
+    test('frameLocator().getByText() finds element by text inside iframe', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+        await injectIframeWithContent(page, 'fl-bytext', '<p>Find me</p>');
+
+        await expect(page.frameLocator('#fl-bytext').getByText('Find me')).toBeVisible();
+    });
+
+    test('frameLocator().locator().count() counts elements inside iframe', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+        await injectIframeWithContent(page, 'fl-count', '<li>a</li><li>b</li><li>c</li>');
+
+        const count = await page.frameLocator('#fl-count').locator('li').count();
+        expect(count).toBe(3);
+    });
+
+    test('frameLocator().nth() selects the correct iframe when multiple exist', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+
+        // Inject two iframes with the same class but different content
+        const p1 = new Promise<void>(resolve => page.once('frameattached', () => resolve()));
+        await page.evaluate(() => {
+            const f = document.createElement('iframe');
+            f.className = 'fl-multi';
+            document.body.appendChild(f);
+            f.contentDocument!.open();
+            f.contentDocument!.write('<span id="label">first</span>');
+            f.contentDocument!.close();
+        });
+        await p1;
+
+        const p2 = new Promise<void>(resolve => page.once('frameattached', () => resolve()));
+        await page.evaluate(() => {
+            const f = document.createElement('iframe');
+            f.className = 'fl-multi';
+            document.body.appendChild(f);
+            f.contentDocument!.open();
+            f.contentDocument!.write('<span id="label">second</span>');
+            f.contentDocument!.close();
+        });
+        await p2;
+
+        const first  = await page.frameLocator('.fl-multi').first().locator('#label').textContent();
+        const second = await page.frameLocator('.fl-multi').nth(1).locator('#label').textContent();
+        expect(first).toBe('first');
+        expect(second).toBe('second');
+    });
+
+    test('locator().frameLocator() scopes into a nested iframe via a parent locator', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+        await injectIframeWithContent(page, 'fl-scoped', '<em id="em">scoped</em>');
+
+        // body > #fl-scoped (iframe) > #em
+        const text = await page.locator('body').frameLocator('#fl-scoped').locator('#em').textContent();
+        expect(text).toBe('scoped');
+    });
+});

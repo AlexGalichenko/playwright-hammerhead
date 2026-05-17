@@ -5,7 +5,7 @@ export { RouteHandler, UrlPattern, RouteOptions, ScriptTagOptions, StyleTagOptio
 export { Browser, NewPageOptions } from './browser/browser';
 export { BrowserContext, Cookie } from './browser/browser-context';
 export { Page, GotoOptions, WaitForSelectorOptions, WaitUntilState } from './page/page';
-export { Locator, LocatorState, LocatorFilter, SelectorStep, StepReporter } from './page/locator';
+export { Locator, FrameLocator, LocatorState, LocatorFilter, SelectorStep, StepReporter } from './page/locator';
 export { Keyboard } from './page/keyboard';
 export { Mouse, MouseButton } from './page/mouse';
 export { BridgeSession } from './session/bridge-session';

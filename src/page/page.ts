@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from 'fs';
 import { EventEmitter } from 'events';
 import { Proxy, RequestFilterRule, RequestInfo, ResponseEvent } from 'testcafe-hammerhead';
 import { BridgeSession } from '../session/bridge-session';
-import { Locator, StepReporter } from './locator';
+import { Locator, FrameLocator, StepReporter } from './locator';
 import { Keyboard } from './keyboard';
 import { Mouse } from './mouse';
 import { Route, Request, FulfillOptions, ContinueOptions } from './route';
@@ -411,6 +411,17 @@ export class Page extends EventEmitter {
 
     locator(selector: string): Locator {
         return Locator.fromSelector(this.session, selector, this.defaultTimeout, this.expectTimeout, this._stepReporter, this);
+    }
+
+    frameLocator(selector: string): FrameLocator {
+        return new FrameLocator(
+            this.session,
+            [{ kind: 'iframe', sel: selector }],
+            this.defaultTimeout,
+            this.expectTimeout,
+            this._stepReporter,
+            this,
+        );
     }
 
     getByRole(_role: string, options?: { name?: string | RegExp }): Locator {
