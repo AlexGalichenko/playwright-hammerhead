@@ -1,5 +1,6 @@
 import { Proxy } from 'testcafe-hammerhead';
 import { Browser } from './browser';
+import { SimulatorBrowser } from './simulator-browser';
 
 export interface UseOptions {
     /** Default timeout for page actions and locator operations (default: 30000) */
@@ -19,6 +20,12 @@ export interface LaunchOptions {
     devMode?: boolean;
     /** Timeout defaults applied to every page created by this browser */
     use?: UseOptions;
+    /**
+     * iOS Simulator device to use instead of macOS Safari.
+     * Accepts 'booted', a simulator UDID, or a device name (e.g. 'iPhone 16 Pro').
+     * When set, pages will open in iOS Simulator Safari via `xcrun simctl openurl`.
+     */
+    device?: string;
 }
 
 export class SafariBrowserType {
@@ -36,6 +43,9 @@ export class SafariBrowserType {
             developmentMode: options.devMode ?? false,
         });
 
+        if (options.device !== undefined) {
+            return new SimulatorBrowser(proxy, port, options.use, options.device);
+        }
         return new Browser(proxy, port, options.use);
     }
 }

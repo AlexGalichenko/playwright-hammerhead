@@ -1,6 +1,6 @@
 import { Proxy } from 'testcafe-hammerhead';
 import { BridgeSession } from '../session/bridge-session';
-import { Page } from '../page/page';
+import { Page, PageConfig } from '../page/page';
 import type { UseOptions } from './browser-type';
 
 export interface NewPageOptions {
@@ -21,13 +21,18 @@ export class Browser {
         private readonly _use?: UseOptions
     ) {}
 
+    protected _createPage(proxy: Proxy, session: BridgeSession, config: PageConfig): Page {
+        return new Page(proxy, session, config);
+    }
+
     async newPage(options?: NewPageOptions): Promise<Page> {
         const session = new BridgeSession(this.proxyPort);
-        const page = new Page(this.proxy, session, {
+        const config: PageConfig = {
             actionTimeout: options?.actionTimeout ?? this._use?.actionTimeout,
             navigationTimeout: options?.navigationTimeout ?? this._use?.navigationTimeout,
             expectTimeout: options?.expectTimeout ?? this._use?.expectTimeout,
-        });
+        };
+        const page = this._createPage(this.proxy, session, config);
         this.pages.push(page);
         return page;
     }

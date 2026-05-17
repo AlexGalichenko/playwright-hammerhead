@@ -1,4 +1,6 @@
 export { safari, SafariBrowserType, LaunchOptions, UseOptions } from './browser/browser-type';
+export { SimulatorBrowser } from './browser/simulator-browser';
+export { SimulatorPage } from './page/simulator-page';
 export { expect } from './matchers';
 export { Route, Request, FulfillOptions, ContinueOptions } from './page/route';
 export { RouteHandler, UrlPattern, RouteOptions, ScriptTagOptions, StyleTagOptions, ScreenshotOptions, PageConfig, FilePayload, FileInput } from './page/page';
