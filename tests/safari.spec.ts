@@ -768,7 +768,7 @@ test.describe('page events', () => {
 });
 
 test.describe('has-text', () => {
-    test('completes full checkout as standard_user', async ({ safariPage: page }) => {
+    test('has-text', async ({ safariPage: page }) => {
         await page.goto('https://www.saucedemo.com/');
 
         await page.fill('#user-name', 'standard_user');
@@ -779,6 +779,8 @@ test.describe('has-text', () => {
 
         const inventoryItem = page.locator('.inventory_item');
         await inventoryItem.filter({ hasText: 'Sauce Labs Backpack' }).locator('button').click();
+
+        await page.waitForTimeout(5000);
         await inventoryItem.filter({ hasText: 'Sauce Labs Bike Light' }).locator('button').click();
         await inventoryItem.filter({ hasText: 'Sauce Labs Bolt T-Shirt' }).locator('button').click();
         await inventoryItem.filter({ hasText: 'Sauce Labs Fleece Jacket' }).locator('button').click();

@@ -312,7 +312,7 @@ export class Page extends EventEmitter {
     // --- Locators ---
 
     locator(selector: string): Locator {
-        return new Locator(this.session, selector, this.defaultTimeout, undefined, undefined, this.expectTimeout);
+        return Locator.fromSelector(this.session, selector, this.defaultTimeout, this.expectTimeout);
     }
 
     getByRole(_role: string, options?: { name?: string | RegExp }): Locator {

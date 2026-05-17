@@ -13,32 +13,70 @@ export interface LocatorFilter {
 
 type SerializedText = string | { source: string; flags: string };
 
+// A selector chain step. Steps are executed sequentially in the browser:
+//   css   — querySelectorAll within current context elements
+//   nth   — pick one element by index (negative counts from end)
+//   filter — narrow the set by text / child-locator presence
+//   and   — intersect with an independently-resolved locator
+//   or    — union with an independently-resolved locator
+export type SelectorStep =
+    | { kind: 'css';    sel: string }
+    | { kind: 'nth';    index: number }
+    | { kind: 'filter'; hasText?: SerializedText; hasNotText?: SerializedText; hasSteps?: SelectorStep[]; hasNotSteps?: SelectorStep[] }
+    | { kind: 'and';    steps: SelectorStep[] }
+    | { kind: 'or';     steps: SelectorStep[] };
+
 export class Locator {
-    readonly selector: string;
+    readonly _steps: SelectorStep[];
     readonly _expectTimeout: number;
-    private readonly _filter?: LocatorFilter;
+
+    /** First CSS selector in the chain — kept for error messages. */
+    get selector(): string {
+        const first = this._steps.find(s => s.kind === 'css') as { kind: 'css'; sel: string } | undefined;
+        return first?.sel ?? '';
+    }
 
     constructor(
         private readonly session: BridgeSession,
-        selector: string,
+        steps: SelectorStep[],
         private readonly defaultTimeout: number = 30000,
-        filter?: LocatorFilter,
-        private readonly _nth?: number,
         _expectTimeout: number = 5000,
     ) {
-        const parsed = Locator._parseHasTextPseudo(selector);
-        this.selector = parsed.cleanSelector;
+        this._steps = steps;
         this._expectTimeout = _expectTimeout;
-
-        const hasParsed = parsed.hasText !== undefined || parsed.hasNotText !== undefined;
-        this._filter = hasParsed
-            ? { hasText: parsed.hasText, hasNotText: parsed.hasNotText, ...filter }
-            : filter;
     }
 
-    // Strips :has-text(...) and :has-not-text(...) Playwright pseudo-classes from a selector
-    // string and returns the clean CSS selector together with the extracted text filters.
-    // Supports quoted strings ("..." / '...') and regex literals (/pattern/flags).
+    // -------------------------------------------------------------------------
+    // Factory — parse Playwright pseudo-classes from a raw selector string
+    // -------------------------------------------------------------------------
+
+    static fromSelector(
+        session: BridgeSession,
+        rawSelector: string,
+        defaultTimeout: number,
+        expectTimeout: number,
+    ): Locator {
+        const { cleanSelector, hasText, hasNotText } = Locator._parseHasTextPseudo(rawSelector);
+        const steps: SelectorStep[] = [{ kind: 'css', sel: cleanSelector }];
+        if (hasText !== undefined || hasNotText !== undefined) {
+            const f: Extract<SelectorStep, { kind: 'filter' }> = { kind: 'filter' };
+            if (hasText    !== undefined) f.hasText    = Locator._serText(hasText);
+            if (hasNotText !== undefined) f.hasNotText = Locator._serText(hasNotText);
+            steps.push(f);
+        }
+        return new Locator(session, steps, defaultTimeout, expectTimeout);
+    }
+
+    // -------------------------------------------------------------------------
+    // Private helpers
+    // -------------------------------------------------------------------------
+
+    private static _serText(v: string | RegExp): SerializedText {
+        return v instanceof RegExp ? { source: v.source, flags: v.flags } : v;
+    }
+
+    // Strips :has-text(...) / :has-not-text(...) Playwright pseudo-classes and
+    // returns the clean CSS selector plus the extracted text filters.
     private static _parseHasTextPseudo(selector: string): {
         cleanSelector: string;
         hasText?: string | RegExp;
@@ -48,10 +86,6 @@ export class Locator {
         let hasText: string | RegExp | undefined;
         let hasNotText: string | RegExp | undefined;
 
-        // Matches the argument of :has-text(...) / :has-not-text(...)
-        //   group 1: double-quoted string content
-        //   group 2: single-quoted string content
-        //   group 3: regex literal including slashes and flags
         const arg = String.raw`\(\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|(\/(?:[^\/\\]|\\.)*\/[gimsuy]*))\s*\)`;
 
         s = s.replace(new RegExp(`:has-not-text${arg}`, 'g'), (_, dq, sq, rx) => {
@@ -76,36 +110,6 @@ export class Locator {
         return m ? new RegExp(m[1], m[2]) : new RegExp(literal);
     }
 
-    private get _cssSel(): string {
-        let sel = this.selector;
-        if (this._filter?.has) sel += `:has(${this._filter.has.selector})`;
-        if (this._filter?.hasNot) sel += `:not(:has(${this._filter.hasNot.selector}))`;
-        return sel;
-    }
-
-    private _serText(v: string | RegExp): SerializedText {
-        return v instanceof RegExp ? { source: v.source, flags: v.flags } : v;
-    }
-
-    private _filterExtras(): Record<string, unknown> {
-        const extras: Record<string, unknown> = {};
-        if (this._filter?.hasText !== undefined) extras.hasText = this._serText(this._filter.hasText);
-        if (this._filter?.hasNotText !== undefined) extras.hasNotText = this._serText(this._filter.hasNotText);
-        return extras;
-    }
-
-    private async _nthForCmd(): Promise<number | undefined> {
-        if (this._nth !== undefined) return this._nth;
-        if (this._filter?.hasText === undefined && this._filter?.hasNotText === undefined) return undefined;
-        const indices = await this.session.sendCommand<number[]>({
-            type: 'filterIndices',
-            selector: this._cssSel,
-            ...this._filterExtras(),
-        });
-        if (indices.length === 0) throw new Error(`Locator '${this.selector}': no element matched filter`);
-        return indices[0];
-    }
-
     private async _waitForActionable(timeout: number): Promise<void> {
         const deadline = Date.now() + timeout;
         while (Date.now() < deadline) {
@@ -113,69 +117,50 @@ export class Locator {
                 const [visible, enabled] = await Promise.all([this.isVisible(), this.isEnabled()]);
                 if (visible && enabled) return;
             } catch {
-                // element not yet in DOM or page still loading — keep polling
+                // element not yet in DOM — keep polling
             }
             await new Promise(r => setTimeout(r, 50));
         }
         throw new Error(`Timeout ${timeout}ms waiting for '${this.selector}' to be actionable`);
     }
 
-    // --- Clicks ---
+    // -------------------------------------------------------------------------
+    // Clicks
+    // -------------------------------------------------------------------------
 
     async click(options?: { timeout?: number }): Promise<void> {
         const timeout = options?.timeout ?? this.defaultTimeout;
         await this._waitForActionable(timeout);
-        await this.session.sendCommand({
-            type: 'click',
-            selector: this._cssSel,
-            timeout,
-            nthOfAll: await this._nthForCmd(),
-        });
+        await this.session.sendCommand({ type: 'click', steps: this._steps, timeout });
     }
 
     async dblclick(options?: { timeout?: number }): Promise<void> {
         const timeout = options?.timeout ?? this.defaultTimeout;
         await this._waitForActionable(timeout);
-        await this.session.sendCommand({
-            type: 'dblclick',
-            selector: this._cssSel,
-            timeout,
-            nthOfAll: await this._nthForCmd(),
-        });
+        await this.session.sendCommand({ type: 'dblclick', steps: this._steps, timeout });
     }
 
-    // --- Typing ---
+    // -------------------------------------------------------------------------
+    // Typing
+    // -------------------------------------------------------------------------
 
     async fill(value: string, options?: { timeout?: number }): Promise<void> {
         const timeout = options?.timeout ?? this.defaultTimeout;
         await this._waitForActionable(timeout);
-        await this.session.sendCommand({
-            type: 'fill',
-            selector: this._cssSel,
-            value,
-            timeout,
-            nthOfAll: await this._nthForCmd(),
-        });
+        await this.session.sendCommand({ type: 'fill', steps: this._steps, value, timeout });
     }
 
     async type(text: string, options?: { timeout?: number; delay?: number }): Promise<void> {
         const timeout = options?.timeout ?? this.defaultTimeout;
         await this._waitForActionable(timeout);
-        await this.session.sendCommand({
-            type: 'type',
-            selector: this._cssSel,
-            text,
-            timeout,
-            nthOfAll: await this._nthForCmd(),
-        });
+        await this.session.sendCommand({ type: 'type', steps: this._steps, text, timeout });
     }
 
     async clear(options?: { timeout?: number }): Promise<void> {
         await this.session.sendCommand({
             type: 'clear',
-            selector: this._cssSel,
+            steps: this._steps,
             timeout: options?.timeout ?? this.defaultTimeout,
-            nthOfAll: await this._nthForCmd(),
         });
     }
 
@@ -186,23 +171,15 @@ export class Locator {
     async press(key: string, options?: { timeout?: number }): Promise<void> {
         const timeout = options?.timeout ?? this.defaultTimeout;
         await this._waitForActionable(timeout);
-        await this.session.sendCommand({
-            type: 'press',
-            selector: this._cssSel,
-            key,
-            timeout,
-            nthOfAll: await this._nthForCmd(),
-        });
+        await this.session.sendCommand({ type: 'press', steps: this._steps, key, timeout });
     }
 
-    // --- State queries ---
+    // -------------------------------------------------------------------------
+    // State queries
+    // -------------------------------------------------------------------------
 
     async isVisible(): Promise<boolean> {
-        return this.session.sendCommand<boolean>({
-            type: 'isVisible',
-            selector: this._cssSel,
-            nthOfAll: await this._nthForCmd(),
-        });
+        return this.session.sendCommand<boolean>({ type: 'isVisible', steps: this._steps });
     }
 
     async isHidden(): Promise<boolean> {
@@ -210,11 +187,7 @@ export class Locator {
     }
 
     async isEnabled(): Promise<boolean> {
-        return this.session.sendCommand<boolean>({
-            type: 'isEnabled',
-            selector: this._cssSel,
-            nthOfAll: await this._nthForCmd(),
-        });
+        return this.session.sendCommand<boolean>({ type: 'isEnabled', steps: this._steps });
     }
 
     async isDisabled(): Promise<boolean> {
@@ -222,186 +195,147 @@ export class Locator {
     }
 
     async isChecked(): Promise<boolean> {
-        return this.session.sendCommand<boolean>({
-            type: 'isChecked',
-            selector: this._cssSel,
-            nthOfAll: await this._nthForCmd(),
-        });
+        return this.session.sendCommand<boolean>({ type: 'isChecked', steps: this._steps });
     }
 
     async isEditable(): Promise<boolean> {
-        return this.session.sendCommand<boolean>({
-            type: 'isEditable',
-            selector: this._cssSel,
-            nthOfAll: await this._nthForCmd(),
-        });
+        return this.session.sendCommand<boolean>({ type: 'isEditable', steps: this._steps });
     }
 
-    // --- Content ---
+    // -------------------------------------------------------------------------
+    // Content
+    // -------------------------------------------------------------------------
 
     async textContent(): Promise<string | null> {
         return this.session.sendCommand<string | null>({
             type: 'textContent',
-            selector: this._cssSel,
+            steps: this._steps,
             timeout: this.defaultTimeout,
-            nthOfAll: await this._nthForCmd(),
         });
     }
 
     async innerText(): Promise<string> {
         return this.session.sendCommand<string>({
             type: 'innerText',
-            selector: this._cssSel,
+            steps: this._steps,
             timeout: this.defaultTimeout,
-            nthOfAll: await this._nthForCmd(),
         });
     }
 
     async innerHTML(): Promise<string> {
         return this.session.sendCommand<string>({
             type: 'innerHTML',
-            selector: this._cssSel,
+            steps: this._steps,
             timeout: this.defaultTimeout,
-            nthOfAll: await this._nthForCmd(),
         });
     }
 
     async inputValue(): Promise<string> {
         return this.session.sendCommand<string>({
             type: 'inputValue',
-            selector: this._cssSel,
+            steps: this._steps,
             timeout: this.defaultTimeout,
-            nthOfAll: await this._nthForCmd(),
         });
     }
 
     async getAttribute(name: string): Promise<string | null> {
         return this.session.sendCommand<string | null>({
             type: 'getAttribute',
-            selector: this._cssSel,
+            steps: this._steps,
             name,
             timeout: this.defaultTimeout,
-            nthOfAll: await this._nthForCmd(),
         });
     }
 
-    // --- Actions ---
+    // -------------------------------------------------------------------------
+    // Actions
+    // -------------------------------------------------------------------------
 
     async hover(options?: { timeout?: number }): Promise<void> {
         const timeout = options?.timeout ?? this.defaultTimeout;
         await this._waitForActionable(timeout);
-        await this.session.sendCommand({
-            type: 'hover',
-            selector: this._cssSel,
-            timeout,
-            nthOfAll: await this._nthForCmd(),
-        });
+        await this.session.sendCommand({ type: 'hover', steps: this._steps, timeout });
     }
 
     async focus(options?: { timeout?: number }): Promise<void> {
         await this.session.sendCommand({
             type: 'focus',
-            selector: this._cssSel,
+            steps: this._steps,
             timeout: options?.timeout ?? this.defaultTimeout,
-            nthOfAll: await this._nthForCmd(),
         });
     }
 
     async blur(options?: { timeout?: number }): Promise<void> {
         await this.session.sendCommand({
             type: 'blur',
-            selector: this._cssSel,
+            steps: this._steps,
             timeout: options?.timeout ?? this.defaultTimeout,
-            nthOfAll: await this._nthForCmd(),
         });
     }
 
     async scrollIntoViewIfNeeded(options?: { timeout?: number }): Promise<void> {
         await this.session.sendCommand({
             type: 'scrollIntoView',
-            selector: this._cssSel,
+            steps: this._steps,
             timeout: options?.timeout ?? this.defaultTimeout,
-            nthOfAll: await this._nthForCmd(),
         });
     }
 
     async selectOption(values: string | string[], options?: { timeout?: number }): Promise<string[]> {
         return this.session.sendCommand<string[]>({
             type: 'selectOption',
-            selector: this._cssSel,
+            steps: this._steps,
             values: Array.isArray(values) ? values : [values],
             timeout: options?.timeout ?? this.defaultTimeout,
-            nthOfAll: await this._nthForCmd(),
         });
     }
 
     async check(options?: { timeout?: number }): Promise<void> {
         const timeout = options?.timeout ?? this.defaultTimeout;
         await this._waitForActionable(timeout);
-        await this.session.sendCommand({
-            type: 'check',
-            selector: this._cssSel,
-            timeout,
-            nthOfAll: await this._nthForCmd(),
-        });
+        await this.session.sendCommand({ type: 'check', steps: this._steps, timeout });
     }
 
     async uncheck(options?: { timeout?: number }): Promise<void> {
         const timeout = options?.timeout ?? this.defaultTimeout;
         await this._waitForActionable(timeout);
-        await this.session.sendCommand({
-            type: 'uncheck',
-            selector: this._cssSel,
-            timeout,
-            nthOfAll: await this._nthForCmd(),
-        });
+        await this.session.sendCommand({ type: 'uncheck', steps: this._steps, timeout });
     }
 
     async setChecked(checked: boolean, options?: { timeout?: number }): Promise<void> {
         const timeout = options?.timeout ?? this.defaultTimeout;
         await this._waitForActionable(timeout);
-        await this.session.sendCommand({
-            type: 'setChecked',
-            selector: this._cssSel,
-            checked,
-            timeout,
-            nthOfAll: await this._nthForCmd(),
-        });
+        await this.session.sendCommand({ type: 'setChecked', steps: this._steps, checked, timeout });
     }
 
     async dispatchEvent(type: string, eventInit?: Record<string, unknown>, options?: { timeout?: number }): Promise<void> {
         await this.session.sendCommand({
             type: 'dispatchEvent',
-            selector: this._cssSel,
+            steps: this._steps,
             eventType: type,
             eventInit: eventInit ?? {},
             timeout: options?.timeout ?? this.defaultTimeout,
-            nthOfAll: await this._nthForCmd(),
         });
     }
 
     async boundingBox(options?: { timeout?: number }): Promise<{ x: number; y: number; width: number; height: number } | null> {
         return this.session.sendCommand<{ x: number; y: number; width: number; height: number } | null>({
             type: 'boundingBox',
-            selector: this._cssSel,
+            steps: this._steps,
             timeout: options?.timeout ?? this.defaultTimeout,
-            nthOfAll: await this._nthForCmd(),
         });
     }
 
-    // --- Waiting ---
+    // -------------------------------------------------------------------------
+    // Waiting
+    // -------------------------------------------------------------------------
 
     async waitFor(options?: { state?: LocatorState; timeout?: number }): Promise<void> {
         const state = options?.state ?? 'visible';
         const timeout = options?.timeout ?? this.defaultTimeout;
 
         if (state === 'visible' || state === 'attached') {
-            await this.session.sendCommand({
-                type: 'waitForSelector',
-                selector: this._cssSel,
-                timeout,
-                nthOfAll: await this._nthForCmd(),
-            });
+            await this.session.sendCommand({ type: 'waitForSelector', steps: this._steps, timeout });
         } else if (state === 'actionable') {
             await this._waitForActionable(timeout);
         } else if (state === 'hidden') {
@@ -421,139 +355,162 @@ export class Locator {
         }
     }
 
-    // --- Count / nth / filter ---
+    // -------------------------------------------------------------------------
+    // Count / nth / filter
+    // -------------------------------------------------------------------------
 
     async count(): Promise<number> {
-        const hasTextFilter = this._filter?.hasText !== undefined || this._filter?.hasNotText !== undefined;
-        if (hasTextFilter) {
-            const indices = await this.session.sendCommand<number[]>({
-                type: 'filterIndices',
-                selector: this._cssSel,
-                ...this._filterExtras(),
-            });
-            return indices.length;
-        }
-        return this.session.sendCommand<number>({ type: 'count', selector: this._cssSel });
+        return this.session.sendCommand<number>({ type: 'count', steps: this._steps });
     }
 
     nth(index: number): Locator {
-        return new Locator(this.session, `:is(${this.selector}):nth-child(${index + 1})`, this.defaultTimeout, undefined, undefined, this._expectTimeout);
+        return new Locator(
+            this.session,
+            [...this._steps, { kind: 'nth', index }],
+            this.defaultTimeout,
+            this._expectTimeout,
+        );
     }
 
     first(): Locator {
-        return new Locator(this.session, `:is(${this.selector}):first-child`, this.defaultTimeout, undefined, undefined, this._expectTimeout);
+        return new Locator(
+            this.session,
+            [...this._steps, { kind: 'nth', index: 0 }],
+            this.defaultTimeout,
+            this._expectTimeout,
+        );
     }
 
     last(): Locator {
-        return new Locator(this.session, `:is(${this.selector}):last-child`, this.defaultTimeout, undefined, undefined, this._expectTimeout);
+        return new Locator(
+            this.session,
+            [...this._steps, { kind: 'nth', index: -1 }],
+            this.defaultTimeout,
+            this._expectTimeout,
+        );
     }
 
     locator(subSelector: string): Locator {
-        return new Locator(this.session, `${this.selector} ${subSelector}`, this.defaultTimeout, undefined, undefined, this._expectTimeout);
+        const { cleanSelector, hasText, hasNotText } = Locator._parseHasTextPseudo(subSelector);
+        const steps: SelectorStep[] = [...this._steps, { kind: 'css', sel: cleanSelector }];
+        if (hasText !== undefined || hasNotText !== undefined) {
+            const f: Extract<SelectorStep, { kind: 'filter' }> = { kind: 'filter' };
+            if (hasText    !== undefined) f.hasText    = Locator._serText(hasText);
+            if (hasNotText !== undefined) f.hasNotText = Locator._serText(hasNotText);
+            steps.push(f);
+        }
+        return new Locator(this.session, steps, this.defaultTimeout, this._expectTimeout);
     }
 
     filter(options: LocatorFilter): Locator {
-        return new Locator(this.session, this.selector, this.defaultTimeout, { ...this._filter, ...options }, undefined, this._expectTimeout);
+        const f: Extract<SelectorStep, { kind: 'filter' }> = { kind: 'filter' };
+        if (options.hasText    !== undefined) f.hasText    = Locator._serText(options.hasText);
+        if (options.hasNotText !== undefined) f.hasNotText = Locator._serText(options.hasNotText);
+        if (options.has)    f.hasSteps    = options.has._steps;
+        if (options.hasNot) f.hasNotSteps = options.hasNot._steps;
+        return new Locator(this.session, [...this._steps, f], this.defaultTimeout, this._expectTimeout);
     }
 
     async all(): Promise<Locator[]> {
-        const hasTextFilter = this._filter?.hasText !== undefined || this._filter?.hasNotText !== undefined;
-        if (hasTextFilter) {
-            const indices = await this.session.sendCommand<number[]>({
-                type: 'filterIndices',
-                selector: this._cssSel,
-                ...this._filterExtras(),
-            });
-            return indices.map(i => new Locator(this.session, this._cssSel, this.defaultTimeout, undefined, i, this._expectTimeout));
-        }
-        const count = await this.session.sendCommand<number>({ type: 'count', selector: this._cssSel });
-        return Array.from({ length: count }, (_, i) => new Locator(this.session, this._cssSel, this.defaultTimeout, undefined, i, this._expectTimeout));
+        const count = await this.session.sendCommand<number>({ type: 'count', steps: this._steps });
+        return Array.from({ length: count }, (_, i) =>
+            new Locator(
+                this.session,
+                [...this._steps, { kind: 'nth', index: i }],
+                this.defaultTimeout,
+                this._expectTimeout,
+            )
+        );
     }
 
     async allTextContents(): Promise<string[]> {
-        return this.session.sendCommand<string[]>({
-            type: 'allTextContents',
-            selector: this._cssSel,
-            ...this._filterExtras(),
-        });
+        return this.session.sendCommand<string[]>({ type: 'allTextContents', steps: this._steps });
     }
 
     async allInnerTexts(): Promise<string[]> {
-        return this.session.sendCommand<string[]>({
-            type: 'allInnerTexts',
-            selector: this._cssSel,
-            ...this._filterExtras(),
-        });
+        return this.session.sendCommand<string[]>({ type: 'allInnerTexts', steps: this._steps });
     }
 
-    // --- Aria snapshot ---
-
-    async ariaSnapshot(options?: { timeout?: number }): Promise<string> {
-        return this.session.sendCommand<string>({
-            type: 'ariaSnapshot',
-            selector: this._cssSel,
-            nthOfAll: await this._nthForCmd(),
-            timeout: options?.timeout ?? this.defaultTimeout,
-        });
-    }
-
-    // --- Evaluation ---
+    // -------------------------------------------------------------------------
+    // Evaluation
+    // -------------------------------------------------------------------------
 
     async evaluate<T>(fn: (element: unknown, ...args: unknown[]) => T, ...args: unknown[]): Promise<T> {
         return this.session.sendCommand<T>({
             type: 'locatorEvaluate',
-            selector: this._cssSel,
+            steps: this._steps,
             fn: fn.toString(),
             args,
             timeout: this.defaultTimeout,
-            nthOfAll: await this._nthForCmd(),
         });
     }
 
     async evaluateAll<T>(fn: (elements: unknown[], ...args: unknown[]) => T, ...args: unknown[]): Promise<T> {
         return this.session.sendCommand<T>({
             type: 'evaluateAll',
-            selector: this._cssSel,
+            steps: this._steps,
             fn: fn.toString(),
             args,
-            ...this._filterExtras(),
         });
     }
 
-    // --- Composition ---
+    // -------------------------------------------------------------------------
+    // Composition
+    // -------------------------------------------------------------------------
 
     and(other: Locator): Locator {
-        return new Locator(this.session, `:is(${this.selector}):is(${other.selector})`, this.defaultTimeout, undefined, undefined, this._expectTimeout);
+        return new Locator(
+            this.session,
+            [...this._steps, { kind: 'and', steps: other._steps }],
+            this.defaultTimeout,
+            this._expectTimeout,
+        );
     }
 
     or(other: Locator): Locator {
-        return new Locator(this.session, `:is(${this.selector}), :is(${other.selector})`, this.defaultTimeout, undefined, undefined, this._expectTimeout);
+        return new Locator(
+            this.session,
+            [...this._steps, { kind: 'or', steps: other._steps }],
+            this.defaultTimeout,
+            this._expectTimeout,
+        );
     }
 
-    // --- Drag ---
+    // -------------------------------------------------------------------------
+    // Drag
+    // -------------------------------------------------------------------------
 
     async dragTo(target: Locator, options?: { timeout?: number }): Promise<void> {
         await this.session.sendCommand({
             type: 'dragTo',
-            srcSelector: this._cssSel,
-            tgtSelector: target._cssSel,
-            srcNth: await this._nthForCmd(),
-            tgtNth: await target._nthForCmd(),
+            srcSteps: this._steps,
+            tgtSteps: target._steps,
             timeout: options?.timeout ?? this.defaultTimeout,
         });
     }
 
-    // --- Screenshot ---
+    // -------------------------------------------------------------------------
+    // Aria snapshot
+    // -------------------------------------------------------------------------
+
+    async ariaSnapshot(options?: { timeout?: number }): Promise<string> {
+        return this.session.sendCommand<string>({
+            type: 'ariaSnapshot',
+            steps: this._steps,
+            timeout: options?.timeout ?? this.defaultTimeout,
+        });
+    }
+
+    // -------------------------------------------------------------------------
+    // Screenshot
+    // -------------------------------------------------------------------------
 
     async screenshot(options?: { path?: string; type?: 'png' | 'jpeg'; quality?: number }): Promise<Buffer> {
         const libCode = getModernScreenshotCode();
         const isJpeg = options?.type === 'jpeg';
         const quality = options?.quality ?? (isJpeg ? 0.92 : 1);
-        const nthOfAll = await this._nthForCmd();
-        const targetExpr = nthOfAll !== undefined
-            ? `document.querySelectorAll(${JSON.stringify(this._cssSel)})[${nthOfAll}]`
-            : `document.querySelector(${JSON.stringify(this._cssSel)})`;
 
+        // resolveSteps is defined in the bridge IIFE scope and accessible via eval's scope chain
         const expression = `
             new Promise(function(resolve, reject) {
                 try {
@@ -563,7 +520,8 @@ export class Locator {
                         document.head.appendChild(s);
                         window.__modernScreenshotLoaded = true;
                     }
-                    var target = ${targetExpr};
+                    var els = resolveSteps(${JSON.stringify(this._steps)});
+                    var target = els[0];
                     if (!target) { reject(new Error('Element not found')); return; }
                     var fn = ${isJpeg} ? window.modernScreenshot.domToJpeg : window.modernScreenshot.domToPng;
                     fn(target, { type: ${JSON.stringify(isJpeg ? 'image/jpeg' : 'image/png')}, quality: ${quality} }).then(resolve).catch(reject);

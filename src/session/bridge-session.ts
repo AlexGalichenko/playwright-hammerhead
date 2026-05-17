@@ -220,40 +220,80 @@ export class BridgeSession extends Session {
         return { m: m, p: p };
     }
 
-    function waitForSelector(selector, timeoutMs, nthOfAll) {
+    // Execute a selector-step chain and return the matched elements.
+    // Each step narrows/transforms the current element set:
+    //   css    — querySelectorAll inside every context element (deduped, document-order)
+    //   nth    — pick one by index (negative counts from end)
+    //   filter — narrow by text content and/or child-locator presence
+    //   and    — intersect with an independently-resolved locator
+    //   or     — union with an independently-resolved locator
+    function resolveSteps(steps, initContexts) {
+        var contexts = initContexts || [document.documentElement];
+        var elements = [];
+        for (var si = 0; si < steps.length; si++) {
+            var step = steps[si];
+            if (step.kind === 'css') {
+                var seen = [];
+                elements = [];
+                for (var ci = 0; ci < contexts.length; ci++) {
+                    var found = contexts[ci].querySelectorAll(step.sel);
+                    for (var fi = 0; fi < found.length; fi++) {
+                        if (seen.indexOf(found[fi]) === -1) { seen.push(found[fi]); elements.push(found[fi]); }
+                    }
+                }
+                contexts = elements;
+            } else if (step.kind === 'nth') {
+                var idx = step.index < 0 ? elements.length + step.index : step.index;
+                elements = (idx >= 0 && idx < elements.length) ? [elements[idx]] : [];
+                contexts = elements;
+            } else if (step.kind === 'filter') {
+                var fstep = step;
+                elements = elements.filter(function(el) {
+                    var t = el.textContent || '';
+                    if (fstep.hasText !== undefined) {
+                        if (typeof fstep.hasText === 'string') { if (t.indexOf(fstep.hasText) === -1) return false; }
+                        else { if (!new RegExp(fstep.hasText.source, fstep.hasText.flags || '').test(t)) return false; }
+                    }
+                    if (fstep.hasNotText !== undefined) {
+                        if (typeof fstep.hasNotText === 'string') { if (t.indexOf(fstep.hasNotText) !== -1) return false; }
+                        else { if (new RegExp(fstep.hasNotText.source, fstep.hasNotText.flags || '').test(t)) return false; }
+                    }
+                    if (fstep.hasSteps    && fstep.hasSteps.length    && resolveSteps(fstep.hasSteps,    [el]).length === 0) return false;
+                    if (fstep.hasNotSteps && fstep.hasNotSteps.length  && resolveSteps(fstep.hasNotSteps, [el]).length  > 0) return false;
+                    return true;
+                });
+                contexts = elements;
+            } else if (step.kind === 'and') {
+                var andEls = resolveSteps(step.steps);
+                elements = elements.filter(function(el) { return andEls.indexOf(el) !== -1; });
+                contexts = elements;
+            } else if (step.kind === 'or') {
+                var orEls = resolveSteps(step.steps);
+                for (var oi = 0; oi < orEls.length; oi++) {
+                    if (elements.indexOf(orEls[oi]) === -1) elements.push(orEls[oi]);
+                }
+                contexts = elements;
+            }
+        }
+        return elements;
+    }
+
+    function waitForElements(steps, timeoutMs) {
         timeoutMs = timeoutMs != null ? timeoutMs : 30000;
-        function findEl() { return nthOfAll !== undefined ? (document.querySelectorAll(selector)[nthOfAll] || null) : document.querySelector(selector); }
+        function findEls() { return resolveSteps(steps); }
         return new Promise(function(resolve, reject) {
-            var el = findEl();
-            if (el) { resolve(el); return; }
+            var els = findEls();
+            if (els.length > 0) { resolve(els); return; }
             var observer = new MutationObserver(function() {
-                var found = findEl();
-                if (found) { observer.disconnect(); clearTimeout(timer); resolve(found); }
+                var found = findEls();
+                if (found.length > 0) { observer.disconnect(); clearTimeout(timer); resolve(found); }
             });
             observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true });
             var timer = setTimeout(function() {
                 observer.disconnect();
-                reject(new Error('Timeout ' + timeoutMs + 'ms waiting for selector: ' + selector));
+                reject(new Error('Timeout ' + timeoutMs + 'ms waiting for elements'));
             }, timeoutMs);
         });
-    }
-
-    // Returns [{el, idx}] — idx is position in the original querySelectorAll result.
-    // When hasText/hasNotText are both undefined, all elements pass through.
-    function applyTextFilter(els, hasText, hasNotText) {
-        return els.reduce(function(acc, el, i) {
-            var t = el.textContent || '';
-            if (hasText !== undefined) {
-                if (typeof hasText === 'string') { if (t.indexOf(hasText) === -1) return acc; }
-                else { if (!new RegExp(hasText.source, hasText.flags || '').test(t)) return acc; }
-            }
-            if (hasNotText !== undefined) {
-                if (typeof hasNotText === 'string') { if (t.indexOf(hasNotText) !== -1) return acc; }
-                else { if (new RegExp(hasNotText.source, hasNotText.flags || '').test(t)) return acc; }
-            }
-            acc.push({ el: el, idx: i });
-            return acc;
-        }, []);
     }`;
     }
 
@@ -472,9 +512,10 @@ export class BridgeSession extends Session {
                 case 'evaluate':
                     return Promise.resolve().then(function() { return (function() { return eval(cmd.expression); })(); });
 
-                // --- Single-element writes ---
+                // --- Single-element writes (step-based) ---
                 case 'click':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
+                    return waitForElements(cmd.steps, cmd.timeout).then(function(els) {
+                        var el = els[0];
                         var i = mouseInits(el);
                         var up = Object.assign({}, i.m, { buttons: 0 });
                         var pup = Object.assign({}, i.p, { buttons: 0 });
@@ -493,7 +534,8 @@ export class BridgeSession extends Session {
                         return null;
                     });
                 case 'dblclick':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
+                    return waitForElements(cmd.steps, cmd.timeout).then(function(els) {
+                        var el = els[0];
                         var i = mouseInits(el);
                         var up = Object.assign({}, i.m, { buttons: 0 });
                         var pup = Object.assign({}, i.p, { buttons: 0 });
@@ -503,14 +545,12 @@ export class BridgeSession extends Session {
                         el.dispatchEvent(new MouseEvent('mouseenter',     Object.assign({}, i.m, { bubbles: false })));
                         el.dispatchEvent(new PointerEvent('pointermove',  i.p));
                         el.dispatchEvent(new MouseEvent('mousemove',      i.m));
-                        // first click
                         el.dispatchEvent(new PointerEvent('pointerdown',  i.p));
                         el.dispatchEvent(new MouseEvent('mousedown',      i.m));
                         el.focus();
                         el.dispatchEvent(new PointerEvent('pointerup',    pup));
                         el.dispatchEvent(new MouseEvent('mouseup',        up));
                         el.dispatchEvent(new MouseEvent('click',          Object.assign({}, up, { detail: 1 })));
-                        // second click
                         el.dispatchEvent(new PointerEvent('pointerdown',  i.p));
                         el.dispatchEvent(new MouseEvent('mousedown',      i.m));
                         el.dispatchEvent(new PointerEvent('pointerup',    pup));
@@ -520,7 +560,8 @@ export class BridgeSession extends Session {
                         return null;
                     });
                 case 'fill':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
+                    return waitForElements(cmd.steps, cmd.timeout).then(function(els) {
+                        var el = els[0];
                         el.focus();
                         if ('value' in el) {
                             var nativeSetter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value');
@@ -532,7 +573,8 @@ export class BridgeSession extends Session {
                         return null;
                     });
                 case 'clear':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
+                    return waitForElements(cmd.steps, cmd.timeout).then(function(els) {
+                        var el = els[0];
                         el.focus();
                         if ('value' in el) {
                             var nativeSetter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value');
@@ -544,13 +586,14 @@ export class BridgeSession extends Session {
                         return null;
                     });
                 case 'type':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
+                    return waitForElements(cmd.steps, cmd.timeout).then(function(els) {
+                        var el = els[0];
                         el.focus();
                         var text = cmd.text;
                         var nativeSetter = 'value' in el ? Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value') : null;
                         for (var i = 0; i < text.length; i++) {
                             var ch = text[i];
-                            el.dispatchEvent(new KeyboardEvent('keydown', { key: ch, bubbles: true, cancelable: true }));
+                            el.dispatchEvent(new KeyboardEvent('keydown',  { key: ch, bubbles: true, cancelable: true }));
                             el.dispatchEvent(new KeyboardEvent('keypress', { key: ch, bubbles: true, cancelable: true }));
                             if ('value' in el) {
                                 var next = el.value + ch;
@@ -563,16 +606,18 @@ export class BridgeSession extends Session {
                         return null;
                     });
                 case 'press':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
+                    return waitForElements(cmd.steps, cmd.timeout).then(function(els) {
+                        var el = els[0];
                         el.focus();
                         var init = { key: cmd.key, code: cmd.code || cmd.key, bubbles: true, cancelable: true };
-                        el.dispatchEvent(new KeyboardEvent('keydown', init));
+                        el.dispatchEvent(new KeyboardEvent('keydown',  init));
                         el.dispatchEvent(new KeyboardEvent('keypress', init));
-                        el.dispatchEvent(new KeyboardEvent('keyup', init));
+                        el.dispatchEvent(new KeyboardEvent('keyup',    init));
                         return null;
                     });
                 case 'hover':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
+                    return waitForElements(cmd.steps, cmd.timeout).then(function(els) {
+                        var el = els[0];
                         var i = mouseInits(el);
                         var nm = Object.assign({}, i.m, { buttons: 0 });
                         var np = Object.assign({}, i.p, { buttons: 0 });
@@ -585,23 +630,24 @@ export class BridgeSession extends Session {
                         return null;
                     });
                 case 'focus':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) { el.focus(); return null; });
+                    return waitForElements(cmd.steps, cmd.timeout).then(function(els) { els[0].focus(); return null; });
                 case 'blur':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) { el.blur(); return null; });
+                    return waitForElements(cmd.steps, cmd.timeout).then(function(els) { els[0].blur(); return null; });
                 case 'check':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
-                        if (!el.checked) el.click(); return null;
+                    return waitForElements(cmd.steps, cmd.timeout).then(function(els) {
+                        if (!els[0].checked) els[0].click(); return null;
                     });
                 case 'uncheck':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
-                        if (el.checked) el.click(); return null;
+                    return waitForElements(cmd.steps, cmd.timeout).then(function(els) {
+                        if (els[0].checked) els[0].click(); return null;
                     });
                 case 'setChecked':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
-                        if (!!el.checked !== !!cmd.checked) el.click(); return null;
+                    return waitForElements(cmd.steps, cmd.timeout).then(function(els) {
+                        if (!!els[0].checked !== !!cmd.checked) els[0].click(); return null;
                     });
                 case 'selectOption':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
+                    return waitForElements(cmd.steps, cmd.timeout).then(function(els) {
+                        var el = els[0];
                         var values = Array.isArray(cmd.values) ? cmd.values : [cmd.values];
                         var selected = [];
                         Array.from(el.options).forEach(function(opt) {
@@ -612,79 +658,80 @@ export class BridgeSession extends Session {
                         return selected;
                     });
                 case 'scrollIntoView':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
-                        el.scrollIntoView({ behavior: 'smooth', block: 'center' }); return null;
+                    return waitForElements(cmd.steps, cmd.timeout).then(function(els) {
+                        els[0].scrollIntoView({ behavior: 'smooth', block: 'center' }); return null;
                     });
                 case 'dispatchEvent':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
+                    return waitForElements(cmd.steps, cmd.timeout).then(function(els) {
                         var init = Object.assign({ bubbles: true, cancelable: true }, cmd.eventInit || {});
-                        el.dispatchEvent(new CustomEvent(cmd.eventType, init)); return null;
+                        els[0].dispatchEvent(new CustomEvent(cmd.eventType, init)); return null;
                     });
 
                 // --- Single-element reads ---
                 case 'textContent':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) { return el.textContent; });
+                    return waitForElements(cmd.steps, cmd.timeout).then(function(els) { return els[0].textContent; });
                 case 'innerText':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) { return el.innerText; });
+                    return waitForElements(cmd.steps, cmd.timeout).then(function(els) { return els[0].innerText; });
                 case 'innerHTML':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) { return el.innerHTML; });
+                    return waitForElements(cmd.steps, cmd.timeout).then(function(els) { return els[0].innerHTML; });
                 case 'inputValue':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) { return el.value !== undefined ? el.value : null; });
+                    return waitForElements(cmd.steps, cmd.timeout).then(function(els) { return els[0].value !== undefined ? els[0].value : null; });
                 case 'getAttribute':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) { return el.getAttribute(cmd.name); });
+                    return waitForElements(cmd.steps, cmd.timeout).then(function(els) { return els[0].getAttribute(cmd.name); });
                 case 'boundingBox':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
-                        var r = el.getBoundingClientRect();
+                    return waitForElements(cmd.steps, cmd.timeout).then(function(els) {
+                        var r = els[0].getBoundingClientRect();
                         return r.width === 0 && r.height === 0 ? null : { x: r.left, y: r.top, width: r.width, height: r.height };
                     });
                 case 'locatorEvaluate':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function(el) {
-                        return (new Function('element', 'args', 'return (' + cmd.fn + ')(element, args)'))(el, cmd.args);
+                    return waitForElements(cmd.steps, cmd.timeout).then(function(els) {
+                        return (new Function('element', 'args', 'return (' + cmd.fn + ')(element, args)'))(els[0], cmd.args);
                     });
 
-                // --- State queries ---
+                // --- State queries (non-waiting, return false if not found) ---
                 case 'isVisible':
                     return Promise.resolve().then(function() {
-                        var el = cmd.nthOfAll !== undefined ? document.querySelectorAll(cmd.selector)[cmd.nthOfAll] : document.querySelector(cmd.selector);
+                        var el = resolveSteps(cmd.steps)[0];
                         if (!el) return false;
                         var rect = el.getBoundingClientRect(), style = window.getComputedStyle(el);
                         return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none' && style.opacity !== '0';
                     });
                 case 'isEnabled':
                     return Promise.resolve().then(function() {
-                        var el = cmd.nthOfAll !== undefined ? document.querySelectorAll(cmd.selector)[cmd.nthOfAll] : document.querySelector(cmd.selector);
+                        var el = resolveSteps(cmd.steps)[0];
                         return el ? !el.disabled : false;
                     });
                 case 'isChecked':
                     return Promise.resolve().then(function() {
-                        var el = cmd.nthOfAll !== undefined ? document.querySelectorAll(cmd.selector)[cmd.nthOfAll] : document.querySelector(cmd.selector);
+                        var el = resolveSteps(cmd.steps)[0];
                         return el ? !!el.checked : false;
                     });
                 case 'isEditable':
                     return Promise.resolve().then(function() {
-                        var el = cmd.nthOfAll !== undefined ? document.querySelectorAll(cmd.selector)[cmd.nthOfAll] : document.querySelector(cmd.selector);
+                        var el = resolveSteps(cmd.steps)[0];
                         if (!el) return false;
                         return !el.disabled && !el.readOnly;
                     });
 
                 // --- Page info / navigation ---
-                case 'title':    return Promise.resolve(document.title);
-                case 'url':      return Promise.resolve(location.href);
-                case 'content':  return Promise.resolve(document.documentElement.outerHTML);
-                case 'count':    return Promise.resolve(document.querySelectorAll(cmd.selector).length);
+                case 'title':   return Promise.resolve(document.title);
+                case 'url':     return Promise.resolve(location.href);
+                case 'content': return Promise.resolve(document.documentElement.outerHTML);
+                case 'count':
+                    return Promise.resolve(resolveSteps(cmd.steps).length);
                 case 'waitForSelector':
-                    return waitForSelector(cmd.selector, cmd.timeout, cmd.nthOfAll).then(function() { return null; });
+                    return waitForElements(cmd.steps, cmd.timeout).then(function() { return null; });
                 case 'scrollTo':
                     return Promise.resolve().then(function() { window.scrollTo(cmd.x || 0, cmd.y || 0); return null; });
 
-                // --- Global keyboard / mouse ---
+                // --- Global keyboard / mouse (no steps) ---
                 case 'keyPress':
                     return Promise.resolve().then(function() {
                         var target = document.activeElement || document.body;
                         var init = { key: cmd.key, code: cmd.code || cmd.key, bubbles: true, cancelable: true };
-                        target.dispatchEvent(new KeyboardEvent('keydown', init));
+                        target.dispatchEvent(new KeyboardEvent('keydown',  init));
                         target.dispatchEvent(new KeyboardEvent('keypress', init));
-                        target.dispatchEvent(new KeyboardEvent('keyup', init));
+                        target.dispatchEvent(new KeyboardEvent('keyup',    init));
                         return null;
                     });
                 case 'mouseClick':
@@ -707,39 +754,22 @@ export class BridgeSession extends Session {
 
                 // --- Multi-element reads ---
                 case 'allTextContents':
-                    return Promise.resolve().then(function() {
-                        return applyTextFilter(Array.from(document.querySelectorAll(cmd.selector)), cmd.hasText, cmd.hasNotText)
-                            .map(function(x) { return x.el.textContent || ''; });
-                    });
+                    return Promise.resolve(resolveSteps(cmd.steps).map(function(el) { return el.textContent || ''; }));
                 case 'allInnerTexts':
-                    return Promise.resolve().then(function() {
-                        return applyTextFilter(Array.from(document.querySelectorAll(cmd.selector)), cmd.hasText, cmd.hasNotText)
-                            .map(function(x) { return x.el.innerText || ''; });
-                    });
+                    return Promise.resolve(resolveSteps(cmd.steps).map(function(el) { return el.innerText || ''; }));
                 case 'evaluateAll':
                     return Promise.resolve().then(function() {
-                        var els = applyTextFilter(Array.from(document.querySelectorAll(cmd.selector)), cmd.hasText, cmd.hasNotText)
-                            .map(function(x) { return x.el; });
+                        var els = resolveSteps(cmd.steps);
                         return (new Function('elements', 'args', 'return (' + cmd.fn + ')(elements, args)'))(els, cmd.args);
-                    });
-                case 'filterIndices':
-                    return Promise.resolve().then(function() {
-                        return applyTextFilter(Array.from(document.querySelectorAll(cmd.selector)), cmd.hasText, cmd.hasNotText)
-                            .filter(function(x) {
-                                if (cmd.hasSelector && !x.el.querySelector(cmd.hasSelector)) return false;
-                                if (cmd.hasNotSelector && x.el.querySelector(cmd.hasNotSelector)) return false;
-                                return true;
-                            })
-                            .map(function(x) { return x.idx; });
                     });
 
                 // --- Drag ---
                 case 'dragTo':
                     return Promise.resolve().then(function() {
-                        var src = cmd.srcNth !== undefined ? document.querySelectorAll(cmd.srcSelector)[cmd.srcNth] : document.querySelector(cmd.srcSelector);
-                        var tgt = cmd.tgtNth !== undefined ? document.querySelectorAll(cmd.tgtSelector)[cmd.tgtNth] : document.querySelector(cmd.tgtSelector);
-                        if (!src) throw new Error('Drag source not found: ' + cmd.srcSelector);
-                        if (!tgt) throw new Error('Drag target not found: ' + cmd.tgtSelector);
+                        var src = resolveSteps(cmd.srcSteps)[0];
+                        var tgt = resolveSteps(cmd.tgtSteps)[0];
+                        if (!src) throw new Error('Drag source not found');
+                        if (!tgt) throw new Error('Drag target not found');
                         var sr = src.getBoundingClientRect(), tr = tgt.getBoundingClientRect();
                         var sx = sr.left + sr.width / 2, sy = sr.top + sr.height / 2;
                         var tx = tr.left + tr.width / 2, ty = tr.top + tr.height / 2;
@@ -761,15 +791,10 @@ export class BridgeSession extends Session {
                 // --- Aria snapshot ---
                 case 'ariaSnapshot':
                     return Promise.resolve().then(function() {
-                        var root = cmd.selector
-                            ? (cmd.nthOfAll !== undefined
-                                ? document.querySelectorAll(cmd.selector)[cmd.nthOfAll]
-                                : document.querySelector(cmd.selector))
-                            : document.body;
-                        if (!root) return '';
-                        if (!cmd.selector) {
+                        var root = (cmd.steps && cmd.steps.length) ? resolveSteps(cmd.steps)[0] : null;
+                        if (!root) {
                             var bodyKids = '';
-                            for (var i = 0; i < root.childNodes.length; i++) bodyKids += buildAriaSnapshot(root.childNodes[i], '  ');
+                            for (var i = 0; i < document.body.childNodes.length; i++) bodyKids += buildAriaSnapshot(document.body.childNodes[i], '  ');
                             return '- document:\\n' + bodyKids;
                         }
                         return buildAriaSnapshot(root, '');
