@@ -103,10 +103,8 @@ export class BridgeSession extends Session {
         return `
     window.__hhDialogDefaults = window.__hhDialogDefaults || { confirm: true, prompt: '' };
     (function() {
-        var origAlert = window.alert;
         window.alert = function(msg) {
             sendEvent('dialog', { type: 'alert', message: String(msg == null ? '' : msg), defaultValue: '' });
-            return typeof origAlert === 'function' ? origAlert.call(window, msg) : undefined;
         };
         var origConfirm = window.confirm;
         window.confirm = function(msg) {
@@ -140,10 +138,9 @@ export class BridgeSession extends Session {
     private _popupForwarder(): string {
         return `
     (function() {
-        var origOpen = window.open;
-        window.open = function(url, target, features) {
+        window.open = function(url, target) {
             sendEvent('popup', { url: url ? String(url) : '', target: target ? String(target) : '' });
-            return typeof origOpen === 'function' ? origOpen.apply(window, arguments) : null;
+            return null;
         };
     })();`;
     }

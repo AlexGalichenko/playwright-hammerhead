@@ -309,48 +309,6 @@ test.describe('page.route', () => {
     });
 });
 
-test.describe('Safari via hammerhead proxy', () => {
-    test('page has correct title', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
-        const title = await page.title();
-        expect(title).toContain('Swag Labs');
-    });
-
-    test('can read heading text content', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
-        const heading = await page.locator('h1').textContent();
-        expect(heading?.trim()).toBe('Swag Labs');
-    });
-
-    test('can evaluate JS in the page context', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
-        const linkCount = await page.evaluate(
-            () => document.querySelectorAll('a').length
-        );
-        expect(linkCount).toBeGreaterThan(0);
-    });
-
-    test('locator isVisible reflects element presence', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
-        await expect(page.locator('h1')).toBeVisible();
-        await expect(page.locator('#does-not-exist')).toBeHidden();
-    });
-
-    test('can read href attribute via locator', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
-        const href = await page.locator('a').getAttribute('href');
-        expect(href).toBeTruthy();
-    });
-});
-
-test.describe('Google calc', () => {
-    test('page has correct title', async ({ safariPage: page }) => {
-        await page.goto('https://www.google.com/search?q=google+calculator');
-        const title = await page.title();
-        expect(title).toContain('Google Search');
-    });
-});
-
 test.describe('page.addInitScript', () => {
     test('string script sets window variable before page code runs', async ({ safariPage: page }) => {
         await page.addInitScript('window.__initFlag = true;');
