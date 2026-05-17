@@ -164,6 +164,8 @@ export class Page extends EventEmitter {
     private _mainFrame: Frame | undefined;
     private readonly _trackedFrames = new Map<string, Frame>();
     private _browserContext: BrowserContext | undefined;
+    private _navHistory: string[] = [];
+    private _navIndex = -1;
 
     constructor(
         private readonly proxy: Proxy,
@@ -300,6 +302,9 @@ export class Page extends EventEmitter {
             const timeout = options?.timeout ?? this.navigationTimeout;
             (this.session as unknown as { isReady: boolean }).isReady = false;
             const proxiedUrl = this.proxy.openSession(url, this.session, { url: '' });
+            this._navHistory = this._navHistory.slice(0, this._navIndex + 1);
+            this._navHistory.push(proxiedUrl);
+            this._navIndex = this._navHistory.length - 1;
             const readyPromise = this.session.waitForReady(timeout);
             await this.session.sendCommand({ type: 'evaluate', expression: `location.href = ${JSON.stringify(proxiedUrl)}` }).catch(() => {});
             await readyPromise;
@@ -311,27 +316,33 @@ export class Page extends EventEmitter {
             const timeout = options?.timeout ?? this.navigationTimeout;
             (this.session as unknown as { isReady: boolean }).isReady = false;
             const readyPromise = this.session.waitForReady(timeout);
-            await this.session.sendCommand({ type: 'evaluate', expression: 'location.reload()' }).catch(() => {});
+            void this.session.sendCommand({ type: 'evaluate', expression: 'location.reload()' }).catch(() => {});
             await readyPromise;
         });
     }
 
     async goBack(options?: { timeout?: number }): Promise<void> {
         return this._stepReporter('page.goBack()', async () => {
+            if (this._navIndex <= 0) return;
             const timeout = options?.timeout ?? this.navigationTimeout;
+            this._navIndex--;
+            const prevUrl = this._navHistory[this._navIndex];
             (this.session as unknown as { isReady: boolean }).isReady = false;
             const readyPromise = this.session.waitForReady(timeout);
-            await this.session.sendCommand({ type: 'evaluate', expression: 'history.back()' }).catch(() => {});
+            await this.session.sendCommand({ type: 'evaluate', expression: `location.href = ${JSON.stringify(prevUrl)}` }).catch(() => {});
             await readyPromise;
         });
     }
 
     async goForward(options?: { timeout?: number }): Promise<void> {
         return this._stepReporter('page.goForward()', async () => {
+            if (this._navIndex >= this._navHistory.length - 1) return;
             const timeout = options?.timeout ?? this.navigationTimeout;
+            this._navIndex++;
+            const nextUrl = this._navHistory[this._navIndex];
             (this.session as unknown as { isReady: boolean }).isReady = false;
             const readyPromise = this.session.waitForReady(timeout);
-            await this.session.sendCommand({ type: 'evaluate', expression: 'history.forward()' }).catch(() => {});
+            await this.session.sendCommand({ type: 'evaluate', expression: `location.href = ${JSON.stringify(nextUrl)}` }).catch(() => {});
             await readyPromise;
         });
     }
@@ -437,11 +448,11 @@ export class Page extends EventEmitter {
 
     getByText(text: string | RegExp): Locator {
         const textStr = typeof text === 'string' ? text : text.source;
-        return this.locator(`*:has-text("${textStr}")`);
+        return this.locator(`body *:has-text("${textStr}")`);
     }
 
     getByLabel(text: string): Locator {
-        return this.locator(`[aria-label="${text}"], label:has-text("${text}") + input, label:has-text("${text}") ~ input`);
+        return new Locator(this.session, [{ kind: 'getByLabel', text }], this.defaultTimeout, this.expectTimeout, this._stepReporter, this);
     }
 
     getByPlaceholder(placeholder: string): Locator {

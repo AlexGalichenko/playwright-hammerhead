@@ -303,6 +303,39 @@ export class BridgeSession extends Session {
                     if (elements.indexOf(orEls[oi]) === -1) elements.push(orEls[oi]);
                 }
                 contexts = elements;
+            } else if (step.kind === 'getByLabel') {
+                var ltext = step.text;
+                var lSeen = [];
+                var lEls = [];
+                var root = contexts.length ? contexts[0].ownerDocument || document : document;
+                // aria-label exact match
+                var byAria = root.querySelectorAll('[aria-label]');
+                for (var ai = 0; ai < byAria.length; ai++) {
+                    if ((byAria[ai].getAttribute('aria-label') || '') === ltext && lSeen.indexOf(byAria[ai]) === -1) {
+                        lSeen.push(byAria[ai]); lEls.push(byAria[ai]);
+                    }
+                }
+                // <label> elements whose trimmed textContent matches
+                var lbls = root.querySelectorAll('label');
+                for (var lbli = 0; lbli < lbls.length; lbli++) {
+                    var lbl = lbls[lbli];
+                    if ((lbl.textContent || '').trim() !== ltext) continue;
+                    var forId = lbl.getAttribute('for');
+                    if (forId) {
+                        var ctrl = root.getElementById(forId);
+                        if (ctrl && lSeen.indexOf(ctrl) === -1) { lSeen.push(ctrl); lEls.push(ctrl); }
+                    } else {
+                        var sib = lbl.nextElementSibling;
+                        while (sib) {
+                            if (/^(INPUT|SELECT|TEXTAREA)$/i.test(sib.tagName) && lSeen.indexOf(sib) === -1) {
+                                lSeen.push(sib); lEls.push(sib); break;
+                            }
+                            sib = sib.nextElementSibling;
+                        }
+                    }
+                }
+                elements = lEls;
+                contexts = elements;
             } else if (step.kind === 'iframe') {
                 var iSeen = [];
                 var iframes = [];
@@ -763,7 +796,7 @@ export class BridgeSession extends Session {
 
                 // --- Page info / navigation ---
                 case 'title':   return Promise.resolve(document.title);
-                case 'url':     return Promise.resolve(location.href);
+                case 'url':     return Promise.resolve((_hh && _hh.utils && _hh.utils.destLocation) ? _hh.utils.destLocation.get() : location.href);
                 case 'content': return Promise.resolve(document.documentElement.outerHTML);
                 case 'count':
                     return Promise.resolve(resolveSteps(cmd.steps).length);
@@ -863,9 +896,20 @@ export class BridgeSession extends Session {
                     return Promise.resolve().then(function() {
                         var el = document.elementFromPoint(cmd.x, cmd.y) || document.body;
                         var x = cmd.x, y = cmd.y;
-                        var touch = new Touch({ identifier: 1, target: el, clientX: x, clientY: y, pageX: x + window.scrollX, pageY: y + window.scrollY, radiusX: 1, radiusY: 1, rotationAngle: 0, force: 1 });
-                        el.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, cancelable: true, touches: [touch], changedTouches: [touch], targetTouches: [touch] }));
-                        el.dispatchEvent(new TouchEvent('touchend',   { bubbles: true, cancelable: true, touches: [],      changedTouches: [touch], targetTouches: [] }));
+                        var TouchCls = window['Touch'];
+                        var TouchEventCls = window['TouchEvent'];
+                        if (TouchCls && TouchEventCls) {
+                            var touch = new TouchCls({ identifier: 1, target: el, clientX: x, clientY: y, pageX: x + window.scrollX, pageY: y + window.scrollY, radiusX: 1, radiusY: 1, rotationAngle: 0, force: 1 });
+                            el.dispatchEvent(new TouchEventCls('touchstart', { bubbles: true, cancelable: true, touches: [touch], changedTouches: [touch], targetTouches: [touch] }));
+                            el.dispatchEvent(new TouchEventCls('touchend',   { bubbles: true, cancelable: true, touches: [],      changedTouches: [touch], targetTouches: [] }));
+                        } else {
+                            var ts = document.createEvent('Event');
+                            ts.initEvent('touchstart', true, true);
+                            el.dispatchEvent(ts);
+                            var te = document.createEvent('Event');
+                            te.initEvent('touchend', true, true);
+                            el.dispatchEvent(te);
+                        }
                         el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: x, clientY: y, screenX: x, screenY: y, detail: 1 }));
                         return null;
                     });
@@ -890,6 +934,10 @@ export class BridgeSession extends Session {
     } else {
         signalReady();
     }
+
+    window.addEventListener('pageshow', function(e) {
+        if (e.persisted) { signalReady(); }
+    });
 
     function poll() {
         sendMsg('bridge_getCommand', {}, 35000).then(function(cmd) {

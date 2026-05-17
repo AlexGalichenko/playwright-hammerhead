@@ -43,6 +43,22 @@ export class SafariBrowserType {
             developmentMode: options.devMode ?? false,
         });
 
+        // Suppress unhandled rejections that hammerhead emits when Safari navigates
+        // away and aborts in-flight connections to the proxy (bfcache, history.back/forward).
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const p = proxy as any;
+        const origOnServiceMsg = p._onServiceMessage.bind(proxy);
+        p._onServiceMessage = async function(req: unknown, res: unknown, serverInfo: unknown): Promise<void> {
+            try {
+                await origOnServiceMsg(req, res, serverInfo);
+            } catch (err: unknown) {
+                const e = err as { code?: string; message?: string };
+                const isSocketError = e.code === 'ECONNRESET' || e.code === 'EPIPE' ||
+                    e.code === 'ERR_HTTP_HEADERS_SENT' || e.message === 'aborted';
+                if (!isSocketError) throw err;
+            }
+        };
+
         if (options.device !== undefined) {
             return new SimulatorBrowser(proxy, port, options.use, options.device);
         }

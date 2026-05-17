@@ -27,12 +27,13 @@ type SerializedText = string | { source: string; flags: string };
 //   or     — union with an independently-resolved locator
 //   iframe — cross into an iframe's contentDocument (used by FrameLocator)
 export type SelectorStep =
-    | { kind: 'css';    sel: string }
-    | { kind: 'nth';    index: number }
-    | { kind: 'filter'; hasText?: SerializedText; hasNotText?: SerializedText; hasSteps?: SelectorStep[]; hasNotSteps?: SelectorStep[] }
-    | { kind: 'and';    steps: SelectorStep[] }
-    | { kind: 'or';     steps: SelectorStep[] }
-    | { kind: 'iframe'; sel: string; index?: number };
+    | { kind: 'css';         sel: string }
+    | { kind: 'nth';         index: number }
+    | { kind: 'filter';      hasText?: SerializedText; hasNotText?: SerializedText; hasSteps?: SelectorStep[]; hasNotSteps?: SelectorStep[] }
+    | { kind: 'and';         steps: SelectorStep[] }
+    | { kind: 'or';          steps: SelectorStep[] }
+    | { kind: 'iframe';      sel: string; index?: number }
+    | { kind: 'getByLabel';  text: string };
 
 export class Locator {
     readonly _steps: SelectorStep[];
@@ -94,6 +95,10 @@ export class Locator {
                     ? `${result}.frameLocator(${JSON.stringify(step.sel)})`
                     : `frameLocator(${JSON.stringify(step.sel)})`;
                 if (step.index !== undefined) result += `.nth(${step.index})`;
+            } else if (step.kind === 'getByLabel') {
+                result = result
+                    ? `${result}.getByLabel(${JSON.stringify(step.text)})`
+                    : `getByLabel(${JSON.stringify(step.text)})`;
             }
         }
         return result || 'locator(*)';
@@ -215,10 +220,20 @@ export class Locator {
                     if (!el) throw new Error('Element not found for tap');
                     var r = el.getBoundingClientRect();
                     var x = r.left + r.width / 2, y = r.top + r.height / 2;
-                    ['touchstart','touchend'].forEach(function(type) {
-                        var t = new Touch({ identifier: 1, target: el, clientX: x, clientY: y, pageX: x, pageY: y });
-                        el.dispatchEvent(new TouchEvent(type, { touches: type === 'touchstart' ? [t] : [], changedTouches: [t], bubbles: true }));
-                    });
+                    var TouchCls = window['Touch'];
+                    var TouchEventCls = window['TouchEvent'];
+                    if (TouchCls && TouchEventCls) {
+                        ['touchstart','touchend'].forEach(function(type) {
+                            var t = new TouchCls({ identifier: 1, target: el, clientX: x, clientY: y, pageX: x, pageY: y });
+                            el.dispatchEvent(new TouchEventCls(type, { touches: type === 'touchstart' ? [t] : [], changedTouches: [t], bubbles: true }));
+                        });
+                    } else {
+                        ['touchstart','touchend'].forEach(function(type) {
+                            var e = document.createEvent('Event');
+                            e.initEvent(type, true, true);
+                            el.dispatchEvent(e);
+                        });
+                    }
                 })()`,
             });
         });
@@ -505,11 +520,11 @@ export class Locator {
 
     getByText(text: string | RegExp): Locator {
         const t = typeof text === 'string' ? text : text.source;
-        return this.locator(`*:has-text("${t}")`);
+        return this.locator(`body *:has-text("${t}")`);
     }
 
     getByLabel(text: string): Locator {
-        return this.locator(`[aria-label="${text}"], label:has-text("${text}") + input, label:has-text("${text}") ~ input`);
+        return new Locator(this.session, [...this._steps, { kind: 'getByLabel', text }], this.defaultTimeout, this._expectTimeout, this._stepReporter, this._page);
     }
 
     getByPlaceholder(placeholder: string): Locator {
@@ -819,11 +834,11 @@ export class FrameLocator {
 
     getByText(text: string | RegExp): Locator {
         const t = typeof text === 'string' ? text : text.source;
-        return this.locator(`*:has-text("${t}")`);
+        return this.locator(`body *:has-text("${t}")`);
     }
 
     getByLabel(text: string): Locator {
-        return this.locator(`[aria-label="${text}"], label:has-text("${text}") + input, label:has-text("${text}") ~ input`);
+        return new Locator(this._session, [...this._steps, { kind: 'getByLabel', text }], this._defaultTimeout, this._expectTimeout, this._stepReporter, this._page);
     }
 
     getByPlaceholder(placeholder: string): Locator {
