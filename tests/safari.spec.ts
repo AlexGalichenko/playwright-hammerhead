@@ -779,8 +779,6 @@ test.describe('has-text', () => {
 
         const inventoryItem = page.locator('.inventory_item');
         await inventoryItem.filter({ hasText: 'Sauce Labs Backpack' }).locator('button').click();
-
-        await page.waitForTimeout(5000);
         await inventoryItem.filter({ hasText: 'Sauce Labs Bike Light' }).locator('button').click();
         await inventoryItem.filter({ hasText: 'Sauce Labs Bolt T-Shirt' }).locator('button').click();
         await inventoryItem.filter({ hasText: 'Sauce Labs Fleece Jacket' }).locator('button').click();

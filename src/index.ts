@@ -9,3 +9,4 @@ export { Keyboard } from './page/keyboard';
 export { Mouse, MouseButton } from './page/mouse';
 export { BridgeSession } from './session/bridge-session';
 export { ConsoleMessage, Dialog, Download, Frame, FileChooser, WebSocketEvent, WorkerEvent, PageResponse } from './page/events';
+export { APIRequestContext, APIResponse, APIRequestOptions, APIRequestContextOptions } from './page/request';
