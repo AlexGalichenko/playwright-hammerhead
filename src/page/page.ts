@@ -13,6 +13,7 @@ import {
 import { openSafariAtUrl, closeSafariWindowByUrlFragment } from '../utils/safari';
 import { getModernScreenshotCode } from '../utils/screenshot';
 import { APIRequestContext } from './request';
+import { Touchscreen } from './touchscreen';
 import { BrowserContext } from '../browser/browser-context';
 
 export type { FulfillOptions, ContinueOptions };
@@ -147,6 +148,7 @@ export class Page extends EventEmitter {
 
     readonly keyboard: Keyboard;
     readonly mouse: Mouse;
+    readonly touchscreen: Touchscreen;
     readonly request: APIRequestContext;
 
     _stepReporter: StepReporter = (_, fn) => fn();
@@ -174,6 +176,7 @@ export class Page extends EventEmitter {
         this.expectTimeout = config.expectTimeout ?? 5_000;
         this.keyboard = new Keyboard(session);
         this.mouse = new Mouse(session);
+        this.touchscreen = new Touchscreen(session);
         this.request = new APIRequestContext();
         this.session.setEventListener((event, data) => this._handleBridgeEvent(event, data as Record<string, unknown>));
     }

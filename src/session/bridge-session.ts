@@ -859,6 +859,17 @@ export class BridgeSession extends Session {
                         return null;
                     });
 
+                case 'touchTap':
+                    return Promise.resolve().then(function() {
+                        var el = document.elementFromPoint(cmd.x, cmd.y) || document.body;
+                        var x = cmd.x, y = cmd.y;
+                        var touch = new Touch({ identifier: 1, target: el, clientX: x, clientY: y, pageX: x + window.scrollX, pageY: y + window.scrollY, radiusX: 1, radiusY: 1, rotationAngle: 0, force: 1 });
+                        el.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, cancelable: true, touches: [touch], changedTouches: [touch], targetTouches: [touch] }));
+                        el.dispatchEvent(new TouchEvent('touchend',   { bubbles: true, cancelable: true, touches: [],      changedTouches: [touch], targetTouches: [] }));
+                        el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: x, clientY: y, screenX: x, screenY: y, detail: 1 }));
+                        return null;
+                    });
+
                 default:
                     return Promise.reject(new Error('Unknown command type: ' + cmd.type));
             }

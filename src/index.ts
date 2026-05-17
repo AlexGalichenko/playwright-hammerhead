@@ -10,6 +10,7 @@ export { Page, GotoOptions, WaitForSelectorOptions, WaitUntilState } from './pag
 export { Locator, FrameLocator, LocatorState, LocatorFilter, SelectorStep, StepReporter } from './page/locator';
 export { Keyboard } from './page/keyboard';
 export { Mouse, MouseButton } from './page/mouse';
+export { Touchscreen } from './page/touchscreen';
 export { BridgeSession } from './session/bridge-session';
 export { ConsoleMessage, Dialog, Download, Frame, FileChooser, WebSocketEvent, WorkerEvent, PageResponse } from './page/events';
 export { APIRequestContext, APIResponse, APIRequestOptions, APIRequestContextOptions } from './page/request';
