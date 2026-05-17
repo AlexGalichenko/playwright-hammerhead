@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from 'fs';
 import { EventEmitter } from 'events';
 import { Proxy, RequestFilterRule, RequestInfo, ResponseEvent } from 'testcafe-hammerhead';
 import { BridgeSession } from '../session/bridge-session';
-import { Locator } from './locator';
+import { Locator, StepReporter } from './locator';
 import { Keyboard } from './keyboard';
 import { Mouse } from './mouse';
 import { Route, Request, FulfillOptions, ContinueOptions } from './route';
@@ -145,6 +145,8 @@ export class Page extends EventEmitter {
     readonly mouse: Mouse;
     readonly request: APIRequestContext;
 
+    _stepReporter: StepReporter = (_, fn) => fn();
+
     private defaultTimeout: number;
     private navigationTimeout: number;
     readonly expectTimeout: number;
@@ -261,37 +263,44 @@ export class Page extends EventEmitter {
     // --- Navigation ---
 
     async goto(url: string, options?: GotoOptions): Promise<void> {
-        const timeout = options?.timeout ?? this.navigationTimeout;
-        (this.session as unknown as { isReady: boolean }).isReady = false;
-
-        const proxiedUrl = this.proxy.openSession(url, this.session, { url: '' });
-        const readyPromise = this.session.waitForReady(timeout);
-        openSafariAtUrl(proxiedUrl);
-        await readyPromise;
+        return this._stepReporter(`page.goto(${JSON.stringify(url)})`, async () => {
+            const timeout = options?.timeout ?? this.navigationTimeout;
+            (this.session as unknown as { isReady: boolean }).isReady = false;
+            const proxiedUrl = this.proxy.openSession(url, this.session, { url: '' });
+            const readyPromise = this.session.waitForReady(timeout);
+            openSafariAtUrl(proxiedUrl);
+            await readyPromise;
+        });
     }
 
     async reload(options?: { timeout?: number }): Promise<void> {
-        const timeout = options?.timeout ?? this.navigationTimeout;
-        (this.session as unknown as { isReady: boolean }).isReady = false;
-        const readyPromise = this.session.waitForReady(timeout);
-        await this.session.sendCommand({ type: 'evaluate', expression: 'location.reload()' }).catch(() => {});
-        await readyPromise;
+        return this._stepReporter('page.reload()', async () => {
+            const timeout = options?.timeout ?? this.navigationTimeout;
+            (this.session as unknown as { isReady: boolean }).isReady = false;
+            const readyPromise = this.session.waitForReady(timeout);
+            await this.session.sendCommand({ type: 'evaluate', expression: 'location.reload()' }).catch(() => {});
+            await readyPromise;
+        });
     }
 
     async goBack(options?: { timeout?: number }): Promise<void> {
-        const timeout = options?.timeout ?? this.navigationTimeout;
-        (this.session as unknown as { isReady: boolean }).isReady = false;
-        const readyPromise = this.session.waitForReady(timeout);
-        await this.session.sendCommand({ type: 'evaluate', expression: 'history.back()' }).catch(() => {});
-        await readyPromise;
+        return this._stepReporter('page.goBack()', async () => {
+            const timeout = options?.timeout ?? this.navigationTimeout;
+            (this.session as unknown as { isReady: boolean }).isReady = false;
+            const readyPromise = this.session.waitForReady(timeout);
+            await this.session.sendCommand({ type: 'evaluate', expression: 'history.back()' }).catch(() => {});
+            await readyPromise;
+        });
     }
 
     async goForward(options?: { timeout?: number }): Promise<void> {
-        const timeout = options?.timeout ?? this.navigationTimeout;
-        (this.session as unknown as { isReady: boolean }).isReady = false;
-        const readyPromise = this.session.waitForReady(timeout);
-        await this.session.sendCommand({ type: 'evaluate', expression: 'history.forward()' }).catch(() => {});
-        await readyPromise;
+        return this._stepReporter('page.goForward()', async () => {
+            const timeout = options?.timeout ?? this.navigationTimeout;
+            (this.session as unknown as { isReady: boolean }).isReady = false;
+            const readyPromise = this.session.waitForReady(timeout);
+            await this.session.sendCommand({ type: 'evaluate', expression: 'history.forward()' }).catch(() => {});
+            await readyPromise;
+        });
     }
 
     // --- Info ---
@@ -315,7 +324,7 @@ export class Page extends EventEmitter {
     // --- Locators ---
 
     locator(selector: string): Locator {
-        return Locator.fromSelector(this.session, selector, this.defaultTimeout, this.expectTimeout);
+        return Locator.fromSelector(this.session, selector, this.defaultTimeout, this.expectTimeout, this._stepReporter);
     }
 
     getByRole(_role: string, options?: { name?: string | RegExp }): Locator {

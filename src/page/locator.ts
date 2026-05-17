@@ -2,6 +2,10 @@ import { writeFileSync } from 'fs';
 import { BridgeSession } from '../session/bridge-session';
 import { getModernScreenshotCode } from '../utils/screenshot';
 
+export type StepReporter = <T>(title: string, fn: () => Promise<T>) => Promise<T>;
+
+const noopReporter: StepReporter = (_, fn) => fn();
+
 export type LocatorState = 'visible' | 'hidden' | 'attached' | 'detached' | 'actionable';
 
 export interface LocatorFilter {
@@ -29,6 +33,7 @@ export type SelectorStep =
 export class Locator {
     readonly _steps: SelectorStep[];
     readonly _expectTimeout: number;
+    readonly _stepReporter: StepReporter;
 
     /** First CSS selector in the chain — kept for error messages. */
     get selector(): string {
@@ -41,9 +46,40 @@ export class Locator {
         steps: SelectorStep[],
         private readonly defaultTimeout: number = 30000,
         _expectTimeout: number = 5000,
+        stepReporter: StepReporter = noopReporter,
     ) {
         this._steps = steps;
         this._expectTimeout = _expectTimeout;
+        this._stepReporter = stepReporter;
+    }
+
+    _description(): string {
+        let result = '';
+        for (const step of this._steps) {
+            if (step.kind === 'css') {
+                result = result
+                    ? `${result}.locator(${JSON.stringify(step.sel)})`
+                    : `locator(${JSON.stringify(step.sel)})`;
+            } else if (step.kind === 'nth') {
+                result = `${result}.nth(${step.index})`;
+            } else if (step.kind === 'filter') {
+                const parts: string[] = [];
+                if (step.hasText) {
+                    const t = typeof step.hasText === 'string' ? step.hasText : `/${step.hasText.source}/${step.hasText.flags}`;
+                    parts.push(`hasText: ${JSON.stringify(t)}`);
+                }
+                if (step.hasNotText) {
+                    const t = typeof step.hasNotText === 'string' ? step.hasNotText : `/${step.hasNotText.source}/${step.hasNotText.flags}`;
+                    parts.push(`hasNotText: ${JSON.stringify(t)}`);
+                }
+                result = `${result}.filter({ ${parts.join(', ')} })`;
+            }
+        }
+        return result || 'locator(*)';
+    }
+
+    private _runStep<T>(title: string, fn: () => Promise<T>): Promise<T> {
+        return this._stepReporter(title, fn);
     }
 
     // -------------------------------------------------------------------------
@@ -55,6 +91,7 @@ export class Locator {
         rawSelector: string,
         defaultTimeout: number,
         expectTimeout: number,
+        stepReporter: StepReporter = noopReporter,
     ): Locator {
         const { cleanSelector, hasText, hasNotText } = Locator._parseHasTextPseudo(rawSelector);
         const steps: SelectorStep[] = [{ kind: 'css', sel: cleanSelector }];
@@ -64,7 +101,7 @@ export class Locator {
             if (hasNotText !== undefined) f.hasNotText = Locator._serText(hasNotText);
             steps.push(f);
         }
-        return new Locator(session, steps, defaultTimeout, expectTimeout);
+        return new Locator(session, steps, defaultTimeout, expectTimeout, stepReporter);
     }
 
     // -------------------------------------------------------------------------
@@ -129,15 +166,19 @@ export class Locator {
     // -------------------------------------------------------------------------
 
     async click(options?: { timeout?: number }): Promise<void> {
-        const timeout = options?.timeout ?? this.defaultTimeout;
-        await this._waitForActionable(timeout);
-        await this.session.sendCommand({ type: 'click', steps: this._steps, timeout });
+        return this._runStep(`${this._description()}.click()`, async () => {
+            const timeout = options?.timeout ?? this.defaultTimeout;
+            await this._waitForActionable(timeout);
+            await this.session.sendCommand({ type: 'click', steps: this._steps, timeout });
+        });
     }
 
     async dblclick(options?: { timeout?: number }): Promise<void> {
-        const timeout = options?.timeout ?? this.defaultTimeout;
-        await this._waitForActionable(timeout);
-        await this.session.sendCommand({ type: 'dblclick', steps: this._steps, timeout });
+        return this._runStep(`${this._description()}.dblclick()`, async () => {
+            const timeout = options?.timeout ?? this.defaultTimeout;
+            await this._waitForActionable(timeout);
+            await this.session.sendCommand({ type: 'dblclick', steps: this._steps, timeout });
+        });
     }
 
     // -------------------------------------------------------------------------
@@ -145,22 +186,28 @@ export class Locator {
     // -------------------------------------------------------------------------
 
     async fill(value: string, options?: { timeout?: number }): Promise<void> {
-        const timeout = options?.timeout ?? this.defaultTimeout;
-        await this._waitForActionable(timeout);
-        await this.session.sendCommand({ type: 'fill', steps: this._steps, value, timeout });
+        return this._runStep(`${this._description()}.fill(${JSON.stringify(value)})`, async () => {
+            const timeout = options?.timeout ?? this.defaultTimeout;
+            await this._waitForActionable(timeout);
+            await this.session.sendCommand({ type: 'fill', steps: this._steps, value, timeout });
+        });
     }
 
     async type(text: string, options?: { timeout?: number; delay?: number }): Promise<void> {
-        const timeout = options?.timeout ?? this.defaultTimeout;
-        await this._waitForActionable(timeout);
-        await this.session.sendCommand({ type: 'type', steps: this._steps, text, timeout });
+        return this._runStep(`${this._description()}.type(${JSON.stringify(text)})`, async () => {
+            const timeout = options?.timeout ?? this.defaultTimeout;
+            await this._waitForActionable(timeout);
+            await this.session.sendCommand({ type: 'type', steps: this._steps, text, timeout });
+        });
     }
 
     async clear(options?: { timeout?: number }): Promise<void> {
-        await this.session.sendCommand({
-            type: 'clear',
-            steps: this._steps,
-            timeout: options?.timeout ?? this.defaultTimeout,
+        return this._runStep(`${this._description()}.clear()`, async () => {
+            await this.session.sendCommand({
+                type: 'clear',
+                steps: this._steps,
+                timeout: options?.timeout ?? this.defaultTimeout,
+            });
         });
     }
 
@@ -169,9 +216,11 @@ export class Locator {
     }
 
     async press(key: string, options?: { timeout?: number }): Promise<void> {
-        const timeout = options?.timeout ?? this.defaultTimeout;
-        await this._waitForActionable(timeout);
-        await this.session.sendCommand({ type: 'press', steps: this._steps, key, timeout });
+        return this._runStep(`${this._description()}.press(${JSON.stringify(key)})`, async () => {
+            const timeout = options?.timeout ?? this.defaultTimeout;
+            await this._waitForActionable(timeout);
+            await this.session.sendCommand({ type: 'press', steps: this._steps, key, timeout });
+        });
     }
 
     // -------------------------------------------------------------------------
@@ -252,60 +301,76 @@ export class Locator {
     // -------------------------------------------------------------------------
 
     async hover(options?: { timeout?: number }): Promise<void> {
-        const timeout = options?.timeout ?? this.defaultTimeout;
-        await this._waitForActionable(timeout);
-        await this.session.sendCommand({ type: 'hover', steps: this._steps, timeout });
+        return this._runStep(`${this._description()}.hover()`, async () => {
+            const timeout = options?.timeout ?? this.defaultTimeout;
+            await this._waitForActionable(timeout);
+            await this.session.sendCommand({ type: 'hover', steps: this._steps, timeout });
+        });
     }
 
     async focus(options?: { timeout?: number }): Promise<void> {
-        await this.session.sendCommand({
-            type: 'focus',
-            steps: this._steps,
-            timeout: options?.timeout ?? this.defaultTimeout,
+        return this._runStep(`${this._description()}.focus()`, async () => {
+            await this.session.sendCommand({
+                type: 'focus',
+                steps: this._steps,
+                timeout: options?.timeout ?? this.defaultTimeout,
+            });
         });
     }
 
     async blur(options?: { timeout?: number }): Promise<void> {
-        await this.session.sendCommand({
-            type: 'blur',
-            steps: this._steps,
-            timeout: options?.timeout ?? this.defaultTimeout,
+        return this._runStep(`${this._description()}.blur()`, async () => {
+            await this.session.sendCommand({
+                type: 'blur',
+                steps: this._steps,
+                timeout: options?.timeout ?? this.defaultTimeout,
+            });
         });
     }
 
     async scrollIntoViewIfNeeded(options?: { timeout?: number }): Promise<void> {
-        await this.session.sendCommand({
-            type: 'scrollIntoView',
-            steps: this._steps,
-            timeout: options?.timeout ?? this.defaultTimeout,
+        return this._runStep(`${this._description()}.scrollIntoViewIfNeeded()`, async () => {
+            await this.session.sendCommand({
+                type: 'scrollIntoView',
+                steps: this._steps,
+                timeout: options?.timeout ?? this.defaultTimeout,
+            });
         });
     }
 
     async selectOption(values: string | string[], options?: { timeout?: number }): Promise<string[]> {
-        return this.session.sendCommand<string[]>({
-            type: 'selectOption',
-            steps: this._steps,
-            values: Array.isArray(values) ? values : [values],
-            timeout: options?.timeout ?? this.defaultTimeout,
+        return this._runStep(`${this._description()}.selectOption(${JSON.stringify(values)})`, async () => {
+            return this.session.sendCommand<string[]>({
+                type: 'selectOption',
+                steps: this._steps,
+                values: Array.isArray(values) ? values : [values],
+                timeout: options?.timeout ?? this.defaultTimeout,
+            });
         });
     }
 
     async check(options?: { timeout?: number }): Promise<void> {
-        const timeout = options?.timeout ?? this.defaultTimeout;
-        await this._waitForActionable(timeout);
-        await this.session.sendCommand({ type: 'check', steps: this._steps, timeout });
+        return this._runStep(`${this._description()}.check()`, async () => {
+            const timeout = options?.timeout ?? this.defaultTimeout;
+            await this._waitForActionable(timeout);
+            await this.session.sendCommand({ type: 'check', steps: this._steps, timeout });
+        });
     }
 
     async uncheck(options?: { timeout?: number }): Promise<void> {
-        const timeout = options?.timeout ?? this.defaultTimeout;
-        await this._waitForActionable(timeout);
-        await this.session.sendCommand({ type: 'uncheck', steps: this._steps, timeout });
+        return this._runStep(`${this._description()}.uncheck()`, async () => {
+            const timeout = options?.timeout ?? this.defaultTimeout;
+            await this._waitForActionable(timeout);
+            await this.session.sendCommand({ type: 'uncheck', steps: this._steps, timeout });
+        });
     }
 
     async setChecked(checked: boolean, options?: { timeout?: number }): Promise<void> {
-        const timeout = options?.timeout ?? this.defaultTimeout;
-        await this._waitForActionable(timeout);
-        await this.session.sendCommand({ type: 'setChecked', steps: this._steps, checked, timeout });
+        return this._runStep(`${this._description()}.setChecked(${checked})`, async () => {
+            const timeout = options?.timeout ?? this.defaultTimeout;
+            await this._waitForActionable(timeout);
+            await this.session.sendCommand({ type: 'setChecked', steps: this._steps, checked, timeout });
+        });
     }
 
     async dispatchEvent(type: string, eventInit?: Record<string, unknown>, options?: { timeout?: number }): Promise<void> {
@@ -369,6 +434,7 @@ export class Locator {
             [...this._steps, { kind: 'nth', index }],
             this.defaultTimeout,
             this._expectTimeout,
+            this._stepReporter,
         );
     }
 
@@ -378,6 +444,7 @@ export class Locator {
             [...this._steps, { kind: 'nth', index: 0 }],
             this.defaultTimeout,
             this._expectTimeout,
+            this._stepReporter,
         );
     }
 
@@ -387,6 +454,7 @@ export class Locator {
             [...this._steps, { kind: 'nth', index: -1 }],
             this.defaultTimeout,
             this._expectTimeout,
+            this._stepReporter,
         );
     }
 
@@ -399,7 +467,7 @@ export class Locator {
             if (hasNotText !== undefined) f.hasNotText = Locator._serText(hasNotText);
             steps.push(f);
         }
-        return new Locator(this.session, steps, this.defaultTimeout, this._expectTimeout);
+        return new Locator(this.session, steps, this.defaultTimeout, this._expectTimeout, this._stepReporter);
     }
 
     filter(options: LocatorFilter): Locator {
@@ -408,7 +476,7 @@ export class Locator {
         if (options.hasNotText !== undefined) f.hasNotText = Locator._serText(options.hasNotText);
         if (options.has)    f.hasSteps    = options.has._steps;
         if (options.hasNot) f.hasNotSteps = options.hasNot._steps;
-        return new Locator(this.session, [...this._steps, f], this.defaultTimeout, this._expectTimeout);
+        return new Locator(this.session, [...this._steps, f], this.defaultTimeout, this._expectTimeout, this._stepReporter);
     }
 
     async all(): Promise<Locator[]> {
@@ -419,6 +487,7 @@ export class Locator {
                 [...this._steps, { kind: 'nth', index: i }],
                 this.defaultTimeout,
                 this._expectTimeout,
+                this._stepReporter,
             )
         );
     }
@@ -464,6 +533,7 @@ export class Locator {
             [...this._steps, { kind: 'and', steps: other._steps }],
             this.defaultTimeout,
             this._expectTimeout,
+            this._stepReporter,
         );
     }
 
@@ -473,6 +543,7 @@ export class Locator {
             [...this._steps, { kind: 'or', steps: other._steps }],
             this.defaultTimeout,
             this._expectTimeout,
+            this._stepReporter,
         );
     }
 
@@ -481,11 +552,13 @@ export class Locator {
     // -------------------------------------------------------------------------
 
     async dragTo(target: Locator, options?: { timeout?: number }): Promise<void> {
-        await this.session.sendCommand({
-            type: 'dragTo',
-            srcSteps: this._steps,
-            tgtSteps: target._steps,
-            timeout: options?.timeout ?? this.defaultTimeout,
+        return this._runStep(`${this._description()}.dragTo(${target._description()})`, async () => {
+            await this.session.sendCommand({
+                type: 'dragTo',
+                srcSteps: this._steps,
+                tgtSteps: target._steps,
+                timeout: options?.timeout ?? this.defaultTimeout,
+            });
         });
     }
 

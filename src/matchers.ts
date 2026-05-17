@@ -1,8 +1,21 @@
 import { expect as baseExpect } from '@playwright/test';
+import type { StepReporter } from './page/locator';
 import type { Locator } from './page/locator';
 import type { Page } from './page/page';
 
 type MatcherOptions = { timeout?: number };
+
+async function withMatcherStep(
+    reporter: StepReporter,
+    title: string,
+    fn: () => Promise<void>
+): Promise<void> {
+    try {
+        await reporter(title, fn);
+    } catch {
+        // step is already marked failed by the reporter; result returned via pass variable
+    }
+}
 
 async function waitForCondition(
     fn: () => Promise<boolean>,
@@ -24,60 +37,74 @@ type MatcherResult = Promise<{ pass: boolean; message: () => string }>;
 const locatorMatchers = {
     async toBeVisible(this: MatcherContext, locator: Locator, options?: MatcherOptions): MatcherResult {
         const timeout = options?.timeout ?? locator._expectTimeout;
-        const pass = await waitForCondition(() => locator.isVisible(), !this.isNot, timeout);
-        return {
-            pass,
-            message: () => `expected locator to${this.isNot ? ' not' : ''} be visible`,
-        };
+        const not = this.isNot;
+        const msg = () => `expected locator to${not ? ' not' : ''} be visible`;
+        let pass = false;
+        await withMatcherStep(locator._stepReporter, `expect(${locator._description()}).${not ? 'not.' : ''}toBeVisible()`, async () => {
+            pass = await waitForCondition(() => locator.isVisible(), !not, timeout);
+            if (pass !== !not) throw new Error(msg());
+        });
+        return { pass, message: msg };
     },
 
     async toBeHidden(this: MatcherContext, locator: Locator, options?: MatcherOptions): MatcherResult {
         const timeout = options?.timeout ?? locator._expectTimeout;
-        const pass = await waitForCondition(
-            async () => !(await locator.isVisible()),
-            !this.isNot,
-            timeout
-        );
-        return {
-            pass,
-            message: () => `expected locator to${this.isNot ? ' not' : ''} be hidden`,
-        };
+        const not = this.isNot;
+        const msg = () => `expected locator to${not ? ' not' : ''} be hidden`;
+        let pass = false;
+        await withMatcherStep(locator._stepReporter, `expect(${locator._description()}).${not ? 'not.' : ''}toBeHidden()`, async () => {
+            pass = await waitForCondition(async () => !(await locator.isVisible()), !not, timeout);
+            if (pass !== !not) throw new Error(msg());
+        });
+        return { pass, message: msg };
     },
 
     async toBeEnabled(this: MatcherContext, locator: Locator, options?: MatcherOptions): MatcherResult {
         const timeout = options?.timeout ?? locator._expectTimeout;
-        const pass = await waitForCondition(() => locator.isEnabled(), !this.isNot, timeout);
-        return {
-            pass,
-            message: () => `expected locator to${this.isNot ? ' not' : ''} be enabled`,
-        };
+        const not = this.isNot;
+        const msg = () => `expected locator to${not ? ' not' : ''} be enabled`;
+        let pass = false;
+        await withMatcherStep(locator._stepReporter, `expect(${locator._description()}).${not ? 'not.' : ''}toBeEnabled()`, async () => {
+            pass = await waitForCondition(() => locator.isEnabled(), !not, timeout);
+            if (pass !== !not) throw new Error(msg());
+        });
+        return { pass, message: msg };
     },
 
     async toBeDisabled(this: MatcherContext, locator: Locator, options?: MatcherOptions): MatcherResult {
         const timeout = options?.timeout ?? locator._expectTimeout;
-        const pass = await waitForCondition(() => locator.isDisabled(), !this.isNot, timeout);
-        return {
-            pass,
-            message: () => `expected locator to${this.isNot ? ' not' : ''} be disabled`,
-        };
+        const not = this.isNot;
+        const msg = () => `expected locator to${not ? ' not' : ''} be disabled`;
+        let pass = false;
+        await withMatcherStep(locator._stepReporter, `expect(${locator._description()}).${not ? 'not.' : ''}toBeDisabled()`, async () => {
+            pass = await waitForCondition(() => locator.isDisabled(), !not, timeout);
+            if (pass !== !not) throw new Error(msg());
+        });
+        return { pass, message: msg };
     },
 
     async toBeChecked(this: MatcherContext, locator: Locator, options?: MatcherOptions): MatcherResult {
         const timeout = options?.timeout ?? locator._expectTimeout;
-        const pass = await waitForCondition(() => locator.isChecked(), !this.isNot, timeout);
-        return {
-            pass,
-            message: () => `expected locator to${this.isNot ? ' not' : ''} be checked`,
-        };
+        const not = this.isNot;
+        const msg = () => `expected locator to${not ? ' not' : ''} be checked`;
+        let pass = false;
+        await withMatcherStep(locator._stepReporter, `expect(${locator._description()}).${not ? 'not.' : ''}toBeChecked()`, async () => {
+            pass = await waitForCondition(() => locator.isChecked(), !not, timeout);
+            if (pass !== !not) throw new Error(msg());
+        });
+        return { pass, message: msg };
     },
 
     async toBeEditable(this: MatcherContext, locator: Locator, options?: MatcherOptions): MatcherResult {
         const timeout = options?.timeout ?? locator._expectTimeout;
-        const pass = await waitForCondition(() => locator.isEditable(), !this.isNot, timeout);
-        return {
-            pass,
-            message: () => `expected locator to${this.isNot ? ' not' : ''} be editable`,
-        };
+        const not = this.isNot;
+        const msg = () => `expected locator to${not ? ' not' : ''} be editable`;
+        let pass = false;
+        await withMatcherStep(locator._stepReporter, `expect(${locator._description()}).${not ? 'not.' : ''}toBeEditable()`, async () => {
+            pass = await waitForCondition(() => locator.isEditable(), !not, timeout);
+            if (pass !== !not) throw new Error(msg());
+        });
+        return { pass, message: msg };
     },
 
     async toHaveText(
@@ -87,18 +114,20 @@ const locatorMatchers = {
         options?: MatcherOptions
     ): MatcherResult {
         const timeout = options?.timeout ?? locator._expectTimeout;
+        const not = this.isNot;
         let actual: string | null = null;
         const matches = (text: string) =>
             typeof expected === 'string' ? text.trim() === expected : expected.test(text);
-        const pass = await waitForCondition(async () => {
-            actual = await locator.textContent();
-            return actual !== null && matches(actual);
-        }, !this.isNot, timeout);
-        return {
-            pass,
-            message: () =>
-                `expected locator to${this.isNot ? ' not' : ''} have text ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}`,
-        };
+        const msg = () => `expected locator to${not ? ' not' : ''} have text ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}`;
+        let pass = false;
+        await withMatcherStep(locator._stepReporter, `expect(${locator._description()}).${not ? 'not.' : ''}toHaveText(${JSON.stringify(expected)})`, async () => {
+            pass = await waitForCondition(async () => {
+                actual = await locator.textContent();
+                return actual !== null && matches(actual);
+            }, !not, timeout);
+            if (pass !== !not) throw new Error(msg());
+        });
+        return { pass, message: msg };
     },
 
     async toContainText(
@@ -108,18 +137,20 @@ const locatorMatchers = {
         options?: MatcherOptions
     ): MatcherResult {
         const timeout = options?.timeout ?? locator._expectTimeout;
+        const not = this.isNot;
         let actual: string | null = null;
         const contains = (text: string) =>
             typeof expected === 'string' ? text.includes(expected) : expected.test(text);
-        const pass = await waitForCondition(async () => {
-            actual = await locator.textContent();
-            return actual !== null && contains(actual);
-        }, !this.isNot, timeout);
-        return {
-            pass,
-            message: () =>
-                `expected locator to${this.isNot ? ' not' : ''} contain text ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}`,
-        };
+        const msg = () => `expected locator to${not ? ' not' : ''} contain text ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}`;
+        let pass = false;
+        await withMatcherStep(locator._stepReporter, `expect(${locator._description()}).${not ? 'not.' : ''}toContainText(${JSON.stringify(expected)})`, async () => {
+            pass = await waitForCondition(async () => {
+                actual = await locator.textContent();
+                return actual !== null && contains(actual);
+            }, !not, timeout);
+            if (pass !== !not) throw new Error(msg());
+        });
+        return { pass, message: msg };
     },
 
     async toHaveValue(
@@ -129,18 +160,20 @@ const locatorMatchers = {
         options?: MatcherOptions
     ): MatcherResult {
         const timeout = options?.timeout ?? locator._expectTimeout;
+        const not = this.isNot;
         let actual = '';
         const matches = (v: string) =>
             typeof expected === 'string' ? v === expected : expected.test(v);
-        const pass = await waitForCondition(async () => {
-            actual = await locator.inputValue();
-            return matches(actual);
-        }, !this.isNot, timeout);
-        return {
-            pass,
-            message: () =>
-                `expected input to${this.isNot ? ' not' : ''} have value ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}`,
-        };
+        const msg = () => `expected input to${not ? ' not' : ''} have value ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}`;
+        let pass = false;
+        await withMatcherStep(locator._stepReporter, `expect(${locator._description()}).${not ? 'not.' : ''}toHaveValue(${JSON.stringify(expected)})`, async () => {
+            pass = await waitForCondition(async () => {
+                actual = await locator.inputValue();
+                return matches(actual);
+            }, !not, timeout);
+            if (pass !== !not) throw new Error(msg());
+        });
+        return { pass, message: msg };
     },
 
     async toHaveAttribute(
@@ -151,18 +184,20 @@ const locatorMatchers = {
         options?: MatcherOptions
     ): MatcherResult {
         const timeout = options?.timeout ?? locator._expectTimeout;
+        const not = this.isNot;
         let actual: string | null = null;
         const matches = (v: string) =>
             typeof expected === 'string' ? v === expected : expected.test(v);
-        const pass = await waitForCondition(async () => {
-            actual = await locator.getAttribute(name);
-            return actual !== null && matches(actual);
-        }, !this.isNot, timeout);
-        return {
-            pass,
-            message: () =>
-                `expected attribute "${name}" to${this.isNot ? ' not' : ''} be ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}`,
-        };
+        const msg = () => `expected attribute "${name}" to${not ? ' not' : ''} be ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}`;
+        let pass = false;
+        await withMatcherStep(locator._stepReporter, `expect(${locator._description()}).${not ? 'not.' : ''}toHaveAttribute(${JSON.stringify(name)}, ${JSON.stringify(expected)})`, async () => {
+            pass = await waitForCondition(async () => {
+                actual = await locator.getAttribute(name);
+                return actual !== null && matches(actual);
+            }, !not, timeout);
+            if (pass !== !not) throw new Error(msg());
+        });
+        return { pass, message: msg };
     },
 
     async toHaveCount(
@@ -172,16 +207,18 @@ const locatorMatchers = {
         options?: MatcherOptions
     ): MatcherResult {
         const timeout = options?.timeout ?? locator._expectTimeout;
+        const not = this.isNot;
         let actual = 0;
-        const pass = await waitForCondition(async () => {
-            actual = await locator.count();
-            return actual === expected;
-        }, !this.isNot, timeout);
-        return {
-            pass,
-            message: () =>
-                `expected locator to${this.isNot ? ' not' : ''} have count ${expected}, received ${actual}`,
-        };
+        const msg = () => `expected locator to${not ? ' not' : ''} have count ${expected}, received ${actual}`;
+        let pass = false;
+        await withMatcherStep(locator._stepReporter, `expect(${locator._description()}).${not ? 'not.' : ''}toHaveCount(${expected})`, async () => {
+            pass = await waitForCondition(async () => {
+                actual = await locator.count();
+                return actual === expected;
+            }, !not, timeout);
+            if (pass !== !not) throw new Error(msg());
+        });
+        return { pass, message: msg };
     },
 
     async toHaveTitle(
@@ -191,18 +228,20 @@ const locatorMatchers = {
         options?: MatcherOptions
     ): MatcherResult {
         const timeout = options?.timeout ?? page.expectTimeout;
+        const not = this.isNot;
         let actual = '';
         const matches = (t: string) =>
             typeof expected === 'string' ? t === expected : expected.test(t);
-        const pass = await waitForCondition(async () => {
-            actual = await page.title();
-            return matches(actual);
-        }, !this.isNot, timeout);
-        return {
-            pass,
-            message: () =>
-                `expected page to${this.isNot ? ' not' : ''} have title ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}`,
-        };
+        const msg = () => `expected page to${not ? ' not' : ''} have title ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}`;
+        let pass = false;
+        await withMatcherStep(page._stepReporter, `expect(page).${not ? 'not.' : ''}toHaveTitle(${JSON.stringify(expected)})`, async () => {
+            pass = await waitForCondition(async () => {
+                actual = await page.title();
+                return matches(actual);
+            }, !not, timeout);
+            if (pass !== !not) throw new Error(msg());
+        });
+        return { pass, message: msg };
     },
 
     async toHaveURL(
@@ -212,18 +251,20 @@ const locatorMatchers = {
         options?: MatcherOptions
     ): MatcherResult {
         const timeout = options?.timeout ?? page.expectTimeout;
+        const not = this.isNot;
         let actual = '';
         const matches = (u: string) =>
             typeof expected === 'string' ? u.includes(expected) : expected.test(u);
-        const pass = await waitForCondition(async () => {
-            actual = await page.url();
-            return matches(actual);
-        }, !this.isNot, timeout);
-        return {
-            pass,
-            message: () =>
-                `expected page to${this.isNot ? ' not' : ''} have URL ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}`,
-        };
+        const msg = () => `expected page to${not ? ' not' : ''} have URL ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}`;
+        let pass = false;
+        await withMatcherStep(page._stepReporter, `expect(page).${not ? 'not.' : ''}toHaveURL(${JSON.stringify(expected)})`, async () => {
+            pass = await waitForCondition(async () => {
+                actual = await page.url();
+                return matches(actual);
+            }, !not, timeout);
+            if (pass !== !not) throw new Error(msg());
+        });
+        return { pass, message: msg };
     },
 };
 

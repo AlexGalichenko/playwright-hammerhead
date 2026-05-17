@@ -25,8 +25,9 @@ export const test = base.extend<SafariTestFixtures, SafariWorkerFixtures>({
         { scope: 'worker' },
     ],
 
-    safariPage: async ({ safariBrowser }, use) => {
+    safariPage: async ({ safariBrowser }, use, testInfo) => {
         const page = await safariBrowser.newPage();
+        page._stepReporter = (title, fn) => test.step(title, fn);
         await use(page);
         await page.close();
     },
