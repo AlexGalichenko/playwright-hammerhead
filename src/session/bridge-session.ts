@@ -1,5 +1,7 @@
 import { Session } from 'testcafe-hammerhead';
-import { randomUUID } from 'crypto';
+import { randomUUID } from 'node:crypto';
+import { createServer, Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { Deferred } from '../utils/deferred';
 
 export interface BridgeCommand {
@@ -19,6 +21,8 @@ export class BridgeSession extends Session {
     private _initScripts: string[] = [];
     private _eventListener: ((event: string, data: unknown) => void) | null = null;
     private _exposedFunctions = new Map<string, (...args: unknown[]) => unknown>();
+    private _blankServer: Server | null = null;
+    private _blankPort = 0;
 
     readonly proxyPort: number;
 
@@ -33,6 +37,34 @@ export class BridgeSession extends Session {
 
     setEventListener(listener: (event: string, data: unknown) => void): void {
         this._eventListener = listener;
+    }
+
+    // -------------------------------------------------------------------------
+    // Blank-page server — a minimal local HTTP server the proxy fetches to
+    // inject the bridge script into a blank page on first browser open.
+    // -------------------------------------------------------------------------
+
+    getBlankPageUrl(): Promise<string> {
+        if (this._blankServer) return Promise.resolve(`http://127.0.0.1:${this._blankPort}/`);
+        return new Promise<string>((resolve) => {
+            const server = createServer((_req, res) => {
+                res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+                res.end('<!DOCTYPE html><html><head><meta charset="utf-8"></head><body></body></html>');
+            });
+            server.listen(0, '127.0.0.1', () => {
+                this._blankPort = (server.address() as AddressInfo).port;
+                this._blankServer = server;
+                resolve(`http://127.0.0.1:${this._blankPort}/`);
+            });
+        });
+    }
+
+    closeBlankServer(): void {
+        if (this._blankServer) {
+            this._blankServer.close();
+            this._blankServer = null;
+            this._blankPort = 0;
+        }
     }
 
     // -------------------------------------------------------------------------

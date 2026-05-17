@@ -298,7 +298,7 @@ export class Page extends EventEmitter {
             (this.session as unknown as { isReady: boolean }).isReady = false;
             const proxiedUrl = this.proxy.openSession(url, this.session, { url: '' });
             const readyPromise = this.session.waitForReady(timeout);
-            this._openUrl(proxiedUrl);
+            await this.session.sendCommand({ type: 'evaluate', expression: `location.href = ${JSON.stringify(proxiedUrl)}` }).catch(() => {});
             await readyPromise;
         });
     }
@@ -976,6 +976,14 @@ export class Page extends EventEmitter {
 
     // --- Lifecycle ---
 
+    async _openBlankPage(timeout: number): Promise<void> {
+        const blankUrl = await this.session.getBlankPageUrl();
+        const proxiedBlankUrl = this.proxy.openSession(blankUrl, this.session, { url: '' });
+        const readyPromise = this.session.waitForReady(timeout);
+        this._openUrl(proxiedBlankUrl);
+        await readyPromise;
+    }
+
     protected _openUrl(proxiedUrl: string): void {
         openSafariAtUrl(proxiedUrl);
     }
@@ -993,5 +1001,6 @@ export class Page extends EventEmitter {
         this.removeAllListeners();
         this.proxy.closeSession(this.session);
         this._closeBrowser();
+        this.session.closeBlankServer();
     }
 }

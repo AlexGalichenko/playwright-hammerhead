@@ -34,6 +34,7 @@ export class Browser {
         };
         const page = this._createPage(this.proxy, session, config);
         this.pages.push(page);
+        await page._openBlankPage(config.navigationTimeout ?? config.actionTimeout ?? 30_000);
         return page;
     }
 
