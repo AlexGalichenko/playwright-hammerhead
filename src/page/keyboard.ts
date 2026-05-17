@@ -22,4 +22,11 @@ export class Keyboard {
             if (delay > 0) await new Promise(r => setTimeout(r, delay));
         }
     }
+
+    async insertText(text: string): Promise<void> {
+        await this.session.sendCommand({
+            type: 'evaluate',
+            expression: `document.execCommand('insertText', false, ${JSON.stringify(text)})`,
+        });
+    }
 }
