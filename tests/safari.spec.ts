@@ -849,3 +849,150 @@ test.describe('has-text', () => {
         await expect(page.locator('.shopping_cart_badge')).toHaveText('6');
     });
 });
+
+// ── Helper: add a named iframe and wait for its frameattached event ──────────
+async function addIframe(page: import('../src').Page, name: string): Promise<void> {
+    const attached = new Promise<void>(resolve => page.once('frameattached', () => resolve()));
+    await page.evaluate((n: any) => {
+        const f = document.createElement('iframe');
+        f.name = n;
+        f.src = 'about:blank';
+        document.body.appendChild(f);
+    }, name);
+    await attached;
+}
+
+async function removeIframe(page: import('../src').Page, id: string): Promise<void> {
+    const detached = new Promise<void>(resolve => page.once('framedetached', () => resolve()));
+    await page.evaluate((elId: any) => {
+        const el = document.getElementById(elId);
+        el?.parentNode?.removeChild(el);
+    }, id);
+    await detached;
+}
+
+test.describe('page.mainFrame', () => {
+    test('mainFrame().title() matches page.title()', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+        const frameTitle = await page.mainFrame().title();
+        const pageTitle  = await page.title();
+        expect(frameTitle).toBe(pageTitle);
+    });
+
+    test('mainFrame().content() returns the full HTML document', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+        const content = await page.mainFrame().content();
+        expect(content).toMatch(/^<html/i);
+        expect(content).toContain('Swag Labs');
+    });
+
+    test('mainFrame().evaluate() runs JS in the page context', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+        const result = await page.mainFrame().evaluate(() => document.title);
+        expect(result).toContain('Swag Labs');
+    });
+
+    test('mainFrame().locator() can query page elements', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+        const text = await page.mainFrame().locator('h1').textContent();
+        expect(text?.trim()).toBe('Swag Labs');
+    });
+});
+
+test.describe('page.frames', () => {
+    test('frames()[0] is always mainFrame()', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+        expect(page.frames()[0]).toBe(page.mainFrame());
+    });
+
+    test('frames() grows by one when an iframe is attached', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+        const before = page.frames().length;
+
+        await addIframe(page, 'grow-frame');
+
+        expect(page.frames().length).toBe(before + 1);
+    });
+
+    test('frames() shrinks by one when an iframe is removed', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+
+        const attached = new Promise<void>(resolve => page.once('frameattached', () => resolve()));
+        await page.evaluate(() => {
+            const f = document.createElement('iframe');
+            f.id   = '__shrink_frame';
+            f.name = 'shrink-frame';
+            (f as HTMLIFrameElement).src = 'about:blank';
+            document.body.appendChild(f);
+        });
+        await attached;
+
+        const count = page.frames().length;
+        await removeIframe(page, '__shrink_frame');
+
+        expect(page.frames().length).toBe(count - 1);
+    });
+
+    test('both frames appear in frames() when two iframes are added', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+
+        await addIframe(page, 'alpha-frame');
+        await addIframe(page, 'beta-frame');
+
+        const names = page.frames().map(f => f.name());
+        expect(names).toContain('alpha-frame');
+        expect(names).toContain('beta-frame');
+    });
+});
+
+test.describe('page.frame', () => {
+    test('frame({ name }) finds a named iframe', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+        await addIframe(page, 'lookup-frame');
+
+        const found = page.frame({ name: 'lookup-frame' });
+        expect(found).not.toBeNull();
+        expect(found!.name()).toBe('lookup-frame');
+    });
+
+    test('frame({ name }) returns null for an unknown name', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+        expect(page.frame({ name: 'no-such-frame' })).toBeNull();
+    });
+
+    test('frame({ url }) finds a frame by URL pattern', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+
+        // Attach an unnamed iframe so it is keyed by its URL ('about:blank')
+        const attached = new Promise<void>(resolve => page.once('frameattached', () => resolve()));
+        await page.evaluate(() => {
+            const f = document.createElement('iframe');
+            (f as HTMLIFrameElement).src = 'about:blank';
+            document.body.appendChild(f);
+        });
+        await attached;
+
+        const found = page.frame({ url: /about:blank/ });
+        expect(found).not.toBeNull();
+    });
+
+    test('frame({ name }) returns null after the iframe is detached', async ({ safariPage: page }) => {
+        await page.goto('https://www.saucedemo.com/');
+
+        const attached = new Promise<void>(resolve => page.once('frameattached', () => resolve()));
+        await page.evaluate(() => {
+            const f = document.createElement('iframe');
+            f.id   = '__remove_frame';
+            f.name = 'remove-frame';
+            (f as HTMLIFrameElement).src = 'about:blank';
+            document.body.appendChild(f);
+        });
+        await attached;
+
+        expect(page.frame({ name: 'remove-frame' })).not.toBeNull();
+
+        await removeIframe(page, '__remove_frame');
+
+        expect(page.frame({ name: 'remove-frame' })).toBeNull();
+    });
+});

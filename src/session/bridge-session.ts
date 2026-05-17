@@ -184,6 +184,7 @@ export class BridgeSession extends Session {
     document.addEventListener('click', function(e) {
         var t = e.target || e.srcElement;
         if (t && t.tagName === 'INPUT' && (t.type || '').toLowerCase() === 'file') {
+            window.__hhLastFileInput = t;
             sendEvent('filechooser', { multiple: !!t.multiple, accept: t.accept || '' });
         }
     }, true);`;
@@ -798,6 +799,17 @@ export class BridgeSession extends Session {
                             return '- document:\\n' + bodyKids;
                         }
                         return buildAriaSnapshot(root, '');
+                    });
+
+                case 'mouseWheel':
+                    return Promise.resolve().then(function() {
+                        var el = document.elementFromPoint(cmd.x, cmd.y) || document.body;
+                        el.dispatchEvent(new WheelEvent('wheel', {
+                            bubbles: true, cancelable: true,
+                            clientX: cmd.x, clientY: cmd.y,
+                            deltaX: cmd.deltaX || 0, deltaY: cmd.deltaY || 0, deltaMode: 0,
+                        }));
+                        return null;
                     });
 
                 default:

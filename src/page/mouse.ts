@@ -25,4 +25,13 @@ export class Mouse {
     async down(_options?: { button?: MouseButton }): Promise<void> {}
 
     async up(_options?: { button?: MouseButton }): Promise<void> {}
+
+    async wheel(x: number, y: number, options?: { deltaX?: number; deltaY?: number }): Promise<void> {
+        await this.session.sendCommand({
+            type: 'mouseWheel',
+            x, y,
+            deltaX: options?.deltaX ?? 0,
+            deltaY: options?.deltaY ?? 0,
+        });
+    }
 }

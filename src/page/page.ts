@@ -13,6 +13,7 @@ import {
 import { openSafariAtUrl, closeSafariWindowByUrlFragment } from '../utils/safari';
 import { getModernScreenshotCode } from '../utils/screenshot';
 import { APIRequestContext } from './request';
+import { BrowserContext } from '../browser/browser-context';
 
 export type { FulfillOptions, ContinueOptions };
 
@@ -158,6 +159,9 @@ export class Page extends EventEmitter {
     private readonly _requestInfoMap = new Map<string, RequestInfo>();
     private _requestHookSetup = false;
     private _closed = false;
+    private _mainFrame: Frame | undefined;
+    private readonly _trackedFrames = new Map<string, Frame>();
+    private _browserContext: BrowserContext | undefined;
 
     constructor(
         private readonly proxy: Proxy,
@@ -206,17 +210,39 @@ export class Page extends EventEmitter {
                 this.emit('websocket', new WebSocketEvent(data['url'] as string));
                 break;
             case 'filechooser':
-                this.emit('filechooser', new FileChooser(data['multiple'] as boolean, data['accept'] as string));
+                this.emit('filechooser', new FileChooser(data['multiple'] as boolean, data['accept'] as string, this.session));
                 break;
-            case 'frameattached':
-                this.emit('frameattached', new Frame(data['url'] as string, data['name'] as string));
+            case 'frameattached': {
+                const frameUrl = data['url'] as string;
+                const frameName = data['name'] as string;
+                const key = frameName || frameUrl;
+                const af = new Frame(frameUrl, frameName);
+                if (key) this._trackedFrames.set(key, af);
+                this.emit('frameattached', af);
                 break;
-            case 'framedetached':
-                this.emit('framedetached', new Frame(data['url'] as string, data['name'] as string));
+            }
+            case 'framedetached': {
+                const key = (data['name'] as string) || (data['url'] as string);
+                const df = key ? (this._trackedFrames.get(key) ?? new Frame(data['url'] as string, data['name'] as string)) : new Frame(data['url'] as string, data['name'] as string);
+                if (key) this._trackedFrames.delete(key);
+                this.emit('framedetached', df);
                 break;
-            case 'framenavigated':
-                this.emit('framenavigated', new Frame(data['url'] as string, data['name'] as string));
+            }
+            case 'framenavigated': {
+                const nUrl = data['url'] as string;
+                const nName = data['name'] as string;
+                const nKey = nName || nUrl;
+                const existing = nKey ? this._trackedFrames.get(nKey) : undefined;
+                if (existing) {
+                    existing._setUrl(nUrl);
+                    this.emit('framenavigated', existing);
+                } else {
+                    const nf = new Frame(nUrl, nName);
+                    if (nKey) this._trackedFrames.set(nKey, nf);
+                    this.emit('framenavigated', nf);
+                }
                 break;
+            }
             case 'download':
                 this.emit('download', new Download(data['url'] as string, data['suggestedFilename'] as string ?? ''));
                 break;
@@ -352,6 +378,33 @@ export class Page extends EventEmitter {
                 style.textContent = 'html,body{width:${size.width}px!important;height:${size.height}px!important;overflow:auto!important;}';
             })()`);
         });
+    }
+
+    // --- Context / Frames ---
+
+    context(): BrowserContext {
+        if (!this._browserContext) this._browserContext = new BrowserContext(this.session);
+        return this._browserContext;
+    }
+
+    mainFrame(): Frame {
+        if (!this._mainFrame) this._mainFrame = new Frame('', '', this.session, this.defaultTimeout);
+        return this._mainFrame;
+    }
+
+    frames(): Frame[] {
+        return [this.mainFrame(), ...this._trackedFrames.values()];
+    }
+
+    frame(options: { name?: string; url?: string | RegExp }): Frame | null {
+        for (const f of this._trackedFrames.values()) {
+            if (options.name && f.name() === options.name) return f;
+            if (options.url) {
+                const u = f.url();
+                if (typeof options.url === 'string' ? u === options.url || u.includes(options.url) : options.url.test(u)) return f;
+            }
+        }
+        return null;
     }
 
     // --- Locators ---

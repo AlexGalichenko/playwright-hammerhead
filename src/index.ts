@@ -3,6 +3,7 @@ export { expect } from './matchers';
 export { Route, Request, FulfillOptions, ContinueOptions } from './page/route';
 export { RouteHandler, UrlPattern, RouteOptions, ScriptTagOptions, StyleTagOptions, ScreenshotOptions, PageConfig, FilePayload, FileInput } from './page/page';
 export { Browser, NewPageOptions } from './browser/browser';
+export { BrowserContext, Cookie } from './browser/browser-context';
 export { Page, GotoOptions, WaitForSelectorOptions, WaitUntilState } from './page/page';
 export { Locator, LocatorState, LocatorFilter, SelectorStep, StepReporter } from './page/locator';
 export { Keyboard } from './page/keyboard';
