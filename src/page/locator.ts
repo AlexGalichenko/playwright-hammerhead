@@ -575,9 +575,9 @@ export class Locator {
 
     filter(options: LocatorFilter): Locator {
         const f: Extract<SelectorStep, { kind: 'filter' }> = { kind: 'filter' };
-        if (options.hasText    !== undefined) f.hasText    = Locator._serText(options.hasText);
+        if (options.hasText !== undefined) f.hasText    = Locator._serText(options.hasText);
         if (options.hasNotText !== undefined) f.hasNotText = Locator._serText(options.hasNotText);
-        if (options.has)    f.hasSteps    = options.has._steps;
+        if (options.has) f.hasSteps = options.has._steps;
         if (options.hasNot) f.hasNotSteps = options.hasNot._steps;
         return new Locator(this.session, [...this._steps, f], this.defaultTimeout, this._expectTimeout, this._stepReporter, this._page);
     }
