@@ -21,6 +21,7 @@ export class BridgeSession extends Session {
     private _initScripts: string[] = [];
     private _eventListener: ((event: string, data: unknown) => void) | null = null;
     private _exposedFunctions = new Map<string, (...args: unknown[]) => unknown>();
+    private _exposedBindings = new Map<string, (source: Record<string, unknown>, ...args: unknown[]) => unknown>();
     private _blankServer: Server | null = null;
     private _blankPort = 0;
 
@@ -1012,6 +1013,10 @@ export class BridgeSession extends Session {
         this._exposedFunctions.set(name, fn);
     }
 
+    registerExposedBinding(name: string, fn: (source: Record<string, unknown>, ...args: unknown[]) => unknown): void {
+        this._exposedBindings.set(name, fn);
+    }
+
     async bridge_expose_call(msg: ServiceMsg): Promise<{ value?: unknown; error?: string }> {
         const m = msg as Record<string, unknown>;
         const name = (m.expName as string | undefined) ?? '';
@@ -1020,6 +1025,20 @@ export class BridgeSession extends Session {
         if (!fn) return { error: `No exposed function: ${name}` };
         try {
             return { value: await fn(...args) };
+        } catch (e) {
+            return { error: e instanceof Error ? e.message : String(e) };
+        }
+    }
+
+    async bridge_expose_binding_call(msg: ServiceMsg): Promise<{ value?: unknown; error?: string }> {
+        const m = msg as Record<string, unknown>;
+        const name = (m.expName as string | undefined) ?? '';
+        const args = (m.args as unknown[]) ?? [];
+        const source = (m.source as Record<string, unknown>) ?? {};
+        const fn = this._exposedBindings.get(name);
+        if (!fn) return { error: `No exposed binding: ${name}` };
+        try {
+            return { value: await fn(source, ...args) };
         } catch (e) {
             return { error: e instanceof Error ? e.message : String(e) };
         }

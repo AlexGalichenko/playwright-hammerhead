@@ -778,6 +778,77 @@ export class Page extends EventEmitter {
         await this.evaluate(wrapper).catch(() => {});
     }
 
+    async exposeBinding(
+        name: string,
+        fn: (source: { url: string }, ...args: unknown[]) => unknown
+    ): Promise<void> {
+        this.session.registerExposedBinding(name, fn as (source: Record<string, unknown>, ...args: unknown[]) => unknown);
+        const wrapper = `(function() {
+            window[${JSON.stringify(name)}] = function() {
+                var args = Array.prototype.slice.call(arguments);
+                var source = { url: location.href };
+                return window.__hhBridge('bridge_expose_binding_call', { expName: ${JSON.stringify(name)}, source: source, args: args }, 30000)
+                    .then(function(r) { return r && 'value' in r ? r.value : undefined; });
+            };
+        })()`;
+        await this.addInitScript(wrapper);
+        await this.evaluate(wrapper).catch(() => {});
+    }
+
+    async emulateMedia(params: {
+        media?: 'screen' | 'print' | null;
+        colorScheme?: 'light' | 'dark' | 'no-preference' | null;
+        reducedMotion?: 'reduce' | 'no-preference' | null;
+        forcedColors?: 'active' | 'none' | null;
+    } = {}): Promise<void> {
+        const overrides = {
+            media:        params.media        ?? null,
+            colorScheme:  params.colorScheme  ?? null,
+            reducedMotion: params.reducedMotion ?? null,
+            forcedColors: params.forcedColors ?? null,
+        };
+        const script = `(function() {
+            var ov = ${JSON.stringify(overrides)};
+            var orig = window.matchMedia;
+            function makeResult(matches, query) {
+                return { matches: matches, media: query, onchange: null,
+                    addListener: function() {}, removeListener: function() {},
+                    addEventListener: function() {}, removeEventListener: function() {},
+                    dispatchEvent: function() { return false; } };
+            }
+            window.matchMedia = function(query) {
+                var q = (query || '').toLowerCase();
+                if (ov.colorScheme !== null && q.indexOf('prefers-color-scheme') !== -1)
+                    return makeResult(q.indexOf(ov.colorScheme) !== -1, query);
+                if (ov.reducedMotion !== null && q.indexOf('prefers-reduced-motion') !== -1)
+                    return makeResult(q.indexOf(ov.reducedMotion) !== -1, query);
+                if (ov.forcedColors !== null && q.indexOf('forced-colors') !== -1)
+                    return makeResult(q.indexOf(ov.forcedColors) !== -1, query);
+                if (ov.media !== null && (q === 'screen' || q === 'print'))
+                    return makeResult(q === ov.media, query);
+                return orig ? orig.call(window, query) : makeResult(false, query);
+            };
+        })()`;
+        await this.addInitScript(script);
+        await this.evaluate(script).catch(() => {});
+    }
+
+    workers(): never {
+        throw new Error('workers() is not supported by playwright-hammerhead');
+    }
+
+    async pause(): Promise<never> {
+        throw new Error('pause() is not supported by playwright-hammerhead');
+    }
+
+    async bringToFront(): Promise<never> {
+        throw new Error('bringToFront() is not supported by playwright-hammerhead');
+    }
+
+    async pdf(): Promise<never> {
+        throw new Error('pdf() is not supported by playwright-hammerhead — Safari does not support CDP-based PDF generation');
+    }
+
     async setExtraHTTPHeaders(headers: Record<string, string>): Promise<void> {
         const script = `(function() {
             var extra = ${JSON.stringify(headers)};

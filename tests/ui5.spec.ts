@@ -11,8 +11,8 @@ test('has title', async ({ safariPage: page }) => {
   await page.locator('[data-sap-ui="container-cart---cartView--proceedButton"]').click();
   // click data-sap-ui="container-cart---checkoutView--contentsStep-nextButton"
   await page.locator('[data-sap-ui="container-cart---checkoutView--contentsStep-nextButton"]').click();
-    await page.locator('[data-sap-ui="container-cart---checkoutView--paymentTypeStep-nextButton"]').click();
-// fill id="container-cart---checkoutView--creditCardHolderName-inner"
+  await page.locator('[data-sap-ui="container-cart---checkoutView--paymentTypeStep-nextButton"]').click();
+  // fill id="container-cart---checkoutView--creditCardHolderName-inner"
   await page.locator('#container-cart---checkoutView--creditCardHolderName-inner').fill('John Doe');
   // fill id="container-cart---checkoutView--creditCardNumber-inner"
   await page.locator('#container-cart---checkoutView--creditCardNumber-inner').fill('4111 1111 1111 1111');
