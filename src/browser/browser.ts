@@ -41,6 +41,7 @@ export class Browser {
 
     async newContext(options?: NewPageOptions): Promise<BrowserContext> {
         const ctx = new BrowserContext((context) => this._newPageInContext(context, options));
+        ctx._setBrowser(this);
         this._contexts.push(ctx);
         ctx.once('close', () => {
             this._contexts = this._contexts.filter(c => c !== ctx);
