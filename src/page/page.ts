@@ -169,8 +169,9 @@ export class Page extends EventEmitter {
 
     constructor(
         private readonly proxy: Proxy,
-        private readonly session: BridgeSession,
-        config: PageConfig = {}
+        readonly session: BridgeSession,
+        config: PageConfig = {},
+        context?: BrowserContext
     ) {
         super();
         this.defaultTimeout = config.actionTimeout ?? 10_000;
@@ -180,6 +181,7 @@ export class Page extends EventEmitter {
         this.mouse = new Mouse(session);
         this.touchscreen = new Touchscreen(session);
         this.request = new APIRequestContext();
+        if (context) this._browserContext = context;
         this.session.setEventListener((event, data) => this._handleBridgeEvent(event, data as Record<string, unknown>));
     }
 
@@ -397,7 +399,11 @@ export class Page extends EventEmitter {
     // --- Context / Frames ---
 
     context(): BrowserContext {
-        if (!this._browserContext) this._browserContext = new BrowserContext(this.session);
+        if (!this._browserContext) {
+            const ctx = new BrowserContext(() => Promise.resolve(this));
+            this._browserContext = ctx;
+            ctx._registerPage(this);
+        }
         return this._browserContext;
     }
 

@@ -1,6 +1,7 @@
 import { Proxy } from 'testcafe-hammerhead';
 import { BridgeSession } from '../session/bridge-session';
 import { Browser } from './browser';
+import { BrowserContext } from './browser-context';
 import { SimulatorPage } from '../page/simulator-page';
 import { Page, PageConfig } from '../page/page';
 import type { UseOptions } from './browser-type';
@@ -15,7 +16,7 @@ export class SimulatorBrowser extends Browser {
         super(proxy, proxyPort, use);
     }
 
-    protected _createPage(proxy: Proxy, session: BridgeSession, config: PageConfig): Page {
-        return new SimulatorPage(proxy, session, config, this.device);
+    protected _createPage(proxy: Proxy, session: BridgeSession, config: PageConfig, context: BrowserContext): Page {
+        return new SimulatorPage(proxy, session, config, this.device, context);
     }
 }
