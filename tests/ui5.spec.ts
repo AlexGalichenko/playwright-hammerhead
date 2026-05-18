@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures';
 
-test('has title', async ({ safariPage: page }) => {
+test('ui5 cart test', async ({ safariPage: page }) => {
   await page.goto('https://ui5.sap.com/test-resources/sap/m/demokit/cart/webapp/index.html?sap-ui-theme=sap_horizon_dark');
   await page.locator('[role="listitem"][id*=category]').filter({ hasText: 'Keyboards' }).click();
   await page.locator('[role="listitem"][id*=category]').filter({ hasText: 'Internet Keyboard' }).click();
