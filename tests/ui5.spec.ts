@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures';
 
-test('has title', async ({ safariPage: page }) => {
+test('ui5 cart test', async ({ safariPage: page }) => {
   await page.goto('https://ui5.sap.com/test-resources/sap/m/demokit/cart/webapp/index.html?sap-ui-theme=sap_horizon_dark');
   await page.locator('[role="listitem"][id*=category]').filter({ hasText: 'Keyboards' }).click();
   await page.locator('[role="listitem"][id*=category]').filter({ hasText: 'Internet Keyboard' }).click();
@@ -11,8 +11,8 @@ test('has title', async ({ safariPage: page }) => {
   await page.locator('[data-sap-ui="container-cart---cartView--proceedButton"]').click();
   // click data-sap-ui="container-cart---checkoutView--contentsStep-nextButton"
   await page.locator('[data-sap-ui="container-cart---checkoutView--contentsStep-nextButton"]').click();
-    await page.locator('[data-sap-ui="container-cart---checkoutView--paymentTypeStep-nextButton"]').click();
-// fill id="container-cart---checkoutView--creditCardHolderName-inner"
+  await page.locator('[data-sap-ui="container-cart---checkoutView--paymentTypeStep-nextButton"]').click();
+  // fill id="container-cart---checkoutView--creditCardHolderName-inner"
   await page.locator('#container-cart---checkoutView--creditCardHolderName-inner').fill('John Doe');
   // fill id="container-cart---checkoutView--creditCardNumber-inner"
   await page.locator('#container-cart---checkoutView--creditCardNumber-inner').fill('4111 1111 1111 1111');

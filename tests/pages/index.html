@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Local Test Page</title>
+</head>
+<body>
+  <h1 id="heading">Hello from local server</h1>
+  <p id="description">This page is served by the LocalServer.</p>
+  
+  <script>
+    setTimeout(() => {
+       window.open('http://localhost:8000/secondPage.html', '_blank');
+    }, 3000);
+  </script>
+</body>
+</html>

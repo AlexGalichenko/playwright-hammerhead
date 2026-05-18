@@ -21,6 +21,7 @@ export class BridgeSession extends Session {
     private _initScripts: string[] = [];
     private _eventListener: ((event: string, data: unknown) => void) | null = null;
     private _exposedFunctions = new Map<string, (...args: unknown[]) => unknown>();
+    private _exposedBindings = new Map<string, (source: Record<string, unknown>, ...args: unknown[]) => unknown>();
     private _blankServer: Server | null = null;
     private _blankPort = 0;
 
@@ -272,6 +273,21 @@ export class BridgeSession extends Session {
                     }
                 }
                 contexts = elements;
+            } else if (step.kind === 'xpath') {
+                var xSeen = [];
+                elements = [];
+                for (var xci = 0; xci < contexts.length; xci++) {
+                    var xctx = contexts[xci];
+                    var xdoc = xctx.ownerDocument || xctx;
+                    try {
+                        var xres = xdoc.evaluate(step.expr, xctx, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+                        for (var xni = 0; xni < xres.snapshotLength; xni++) {
+                            var xnode = xres.snapshotItem(xni);
+                            if (xnode && xSeen.indexOf(xnode) === -1) { xSeen.push(xnode); elements.push(xnode); }
+                        }
+                    } catch(_xe) {}
+                }
+                contexts = elements;
             } else if (step.kind === 'nth') {
                 var idx = step.index < 0 ? elements.length + step.index : step.index;
                 elements = (idx >= 0 && idx < elements.length) ? [elements[idx]] : [];
@@ -335,6 +351,23 @@ export class BridgeSession extends Session {
                     }
                 }
                 elements = lEls;
+                contexts = elements;
+            } else if (step.kind === 'getByAttr') {
+                var attrSeen = [];
+                var attrEls = [];
+                var attrVal = step.value;
+                for (var attrCi = 0; attrCi < contexts.length; attrCi++) {
+                    var attrCandidates = contexts[attrCi].querySelectorAll('[' + step.attr + ']');
+                    for (var attrFi = 0; attrFi < attrCandidates.length; attrFi++) {
+                        var attrEl = attrCandidates[attrFi];
+                        var attrActual = attrEl.getAttribute(step.attr);
+                        var attrMatch = typeof attrVal === 'string'
+                            ? attrActual === attrVal
+                            : new RegExp(attrVal.source, attrVal.flags || '').test(attrActual || '');
+                        if (attrMatch && attrSeen.indexOf(attrEl) === -1) { attrSeen.push(attrEl); attrEls.push(attrEl); }
+                    }
+                }
+                elements = attrEls;
                 contexts = elements;
             } else if (step.kind === 'iframe') {
                 var iSeen = [];
@@ -815,6 +848,47 @@ export class BridgeSession extends Session {
                         target.dispatchEvent(new KeyboardEvent('keyup',    init));
                         return null;
                     });
+                case 'keyDown':
+                    return Promise.resolve().then(function() {
+                        var target = document.activeElement || document.body;
+                        target.dispatchEvent(new KeyboardEvent('keydown', { key: cmd.key, code: cmd.code || cmd.key, bubbles: true, cancelable: true }));
+                        return null;
+                    });
+                case 'keyUp':
+                    return Promise.resolve().then(function() {
+                        var target = document.activeElement || document.body;
+                        target.dispatchEvent(new KeyboardEvent('keyup', { key: cmd.key, code: cmd.code || cmd.key, bubbles: true, cancelable: true }));
+                        return null;
+                    });
+                case 'mouseMove':
+                    return Promise.resolve().then(function() {
+                        var el = document.elementFromPoint(cmd.x, cmd.y) || document.body;
+                        var init = { bubbles: true, cancelable: true, clientX: cmd.x, clientY: cmd.y, screenX: cmd.x, screenY: cmd.y };
+                        el.dispatchEvent(new PointerEvent('pointermove', Object.assign({}, init, { pointerType: 'mouse', isPrimary: true, pointerId: 1 })));
+                        el.dispatchEvent(new MouseEvent('mousemove', init));
+                        return null;
+                    });
+                case 'mouseDown':
+                    return Promise.resolve().then(function() {
+                        var el = document.elementFromPoint(cmd.x, cmd.y);
+                        if (!el) return null;
+                        var btn = cmd.button === 'right' ? 2 : cmd.button === 'middle' ? 1 : 0;
+                        var m = { bubbles: true, cancelable: true, clientX: cmd.x, clientY: cmd.y, screenX: cmd.x, screenY: cmd.y, button: btn, buttons: 1 };
+                        el.dispatchEvent(new PointerEvent('pointerdown', Object.assign({}, m, { pointerType: 'mouse', isPrimary: true, pointerId: 1 })));
+                        el.dispatchEvent(new MouseEvent('mousedown', m));
+                        el.focus();
+                        return null;
+                    });
+                case 'mouseUp':
+                    return Promise.resolve().then(function() {
+                        var el = document.elementFromPoint(cmd.x, cmd.y);
+                        if (!el) return null;
+                        var btn = cmd.button === 'right' ? 2 : cmd.button === 'middle' ? 1 : 0;
+                        var m = { bubbles: true, cancelable: true, clientX: cmd.x, clientY: cmd.y, screenX: cmd.x, screenY: cmd.y, button: btn, buttons: 0 };
+                        el.dispatchEvent(new PointerEvent('pointerup', Object.assign({}, m, { pointerType: 'mouse', isPrimary: true, pointerId: 1 })));
+                        el.dispatchEvent(new MouseEvent('mouseup', m));
+                        return null;
+                    });
                 case 'mouseClick':
                     return Promise.resolve().then(function() {
                         var el = document.elementFromPoint(cmd.x, cmd.y);
@@ -911,6 +985,38 @@ export class BridgeSession extends Session {
                             el.dispatchEvent(te);
                         }
                         el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: x, clientY: y, screenX: x, screenY: y, detail: 1 }));
+                        return null;
+                    });
+
+                case 'storeHandle':
+                    return Promise.resolve().then(function() {
+                        window.__hhHandles = window.__hhHandles || {};
+                        var val = (new Function('args', 'return (' + cmd.expression + ')')(cmd.args));
+                        window.__hhHandles[cmd.handleId] = val;
+                        return cmd.handleId;
+                    });
+                case 'handleEvaluate':
+                    return Promise.resolve().then(function() {
+                        var h = (window.__hhHandles || {})[cmd.handleId];
+                        return (new Function('handle', 'args', 'return (' + cmd.fn + ')(handle, args)'))(h, cmd.args);
+                    });
+                case 'handleGetProperty':
+                    return Promise.resolve().then(function() {
+                        var h = (window.__hhHandles || {})[cmd.handleId];
+                        var child = h != null ? h[cmd.name] : undefined;
+                        var childId = cmd.handleId + '.' + cmd.name;
+                        window.__hhHandles = window.__hhHandles || {};
+                        window.__hhHandles[childId] = child;
+                        return childId;
+                    });
+                case 'handleJsonValue':
+                    return Promise.resolve().then(function() {
+                        var h = (window.__hhHandles || {})[cmd.handleId];
+                        return JSON.parse(JSON.stringify(h));
+                    });
+                case 'disposeHandle':
+                    return Promise.resolve().then(function() {
+                        if (window.__hhHandles) delete window.__hhHandles[cmd.handleId];
                         return null;
                     });
 
@@ -1012,6 +1118,10 @@ export class BridgeSession extends Session {
         this._exposedFunctions.set(name, fn);
     }
 
+    registerExposedBinding(name: string, fn: (source: Record<string, unknown>, ...args: unknown[]) => unknown): void {
+        this._exposedBindings.set(name, fn);
+    }
+
     async bridge_expose_call(msg: ServiceMsg): Promise<{ value?: unknown; error?: string }> {
         const m = msg as Record<string, unknown>;
         const name = (m.expName as string | undefined) ?? '';
@@ -1025,9 +1135,27 @@ export class BridgeSession extends Session {
         }
     }
 
+    async bridge_expose_binding_call(msg: ServiceMsg): Promise<{ value?: unknown; error?: string }> {
+        const m = msg as Record<string, unknown>;
+        const name = (m.expName as string | undefined) ?? '';
+        const args = (m.args as unknown[]) ?? [];
+        const source = (m.source as Record<string, unknown>) ?? {};
+        const fn = this._exposedBindings.get(name);
+        if (!fn) return { error: `No exposed binding: ${name}` };
+        try {
+            return { value: await fn(source, ...args) };
+        } catch (e) {
+            return { error: e instanceof Error ? e.message : String(e) };
+        }
+    }
+
     async bridge_event(msg: ServiceMsg): Promise<null> {
         if (msg.event && this._eventListener) this._eventListener(msg.event, msg.data ?? {});
         return null;
+    }
+
+    resetReady(): void {
+        this.isReady = false;
     }
 
     async bridge_ready(_msg: ServiceMsg): Promise<null> {
@@ -1087,13 +1215,20 @@ export class BridgeSession extends Session {
     waitForReady(timeout = 30000): Promise<void> {
         if (this.isReady) return Promise.resolve();
 
-        this.readyDeferred = new Deferred<void>();
+        // Reuse an existing deferred so concurrent callers share the same resolution signal.
+        // Each caller wraps it with its own independent timeout.
+        if (!this.readyDeferred) {
+            this.readyDeferred = new Deferred<void>();
+        }
+        const deferred = this.readyDeferred;
+
         return new Promise<void>((resolve, reject) => {
             const timer = setTimeout(() => {
-                this.readyDeferred = null;
                 reject(new Error(`Timeout ${timeout}ms waiting for page bridge to connect`));
             }, timeout);
-            this.readyDeferred!.promise.then(() => { clearTimeout(timer); resolve(); }).catch(reject);
+            deferred.promise
+                .then(() => { clearTimeout(timer); resolve(); })
+                .catch(e => { clearTimeout(timer); reject(e); });
         });
     }
 }

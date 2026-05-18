@@ -2,6 +2,11 @@ import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
     testDir: './tests',
+    webServer: {
+        command: 'node tests/server.js',
+        port: 8000,
+        reuseExistingServer: !process.env.CI,
+    },
     fullyParallel: true,
     forbidOnly: !!process.env.CI,
     retries: process.env.CI ? 2 : 0,

@@ -1,4 +1,5 @@
 import { readFileSync, writeFileSync } from 'fs';
+import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'events';
 import { Proxy, RequestFilterRule, RequestInfo, ResponseEvent } from 'testcafe-hammerhead';
 import { BridgeSession } from '../session/bridge-session';
@@ -11,7 +12,8 @@ import {
     WebSocketEvent, WorkerEvent, PageResponse,
 } from './events';
 import { openSafariAtUrl, closeSafariWindowByUrlFragment } from '../utils/safari';
-import { getModernScreenshotCode } from '../utils/screenshot';
+import { buildScreenshotExpression, decodeScreenshotDataUrl } from '../utils/screenshot';
+import { serializeFiles, fileTransferScript, type FileInput, type FilePayload } from '../utils/files';
 import { APIRequestContext } from './request';
 import { Touchscreen } from './touchscreen';
 import { BrowserContext } from '../browser/browser-context';
@@ -78,8 +80,34 @@ export interface ScreenshotOptions {
     quality?: number;
 }
 
-export type FilePayload = { name: string; mimeType: string; buffer: Buffer };
-export type FileInput = string | string[] | FilePayload | FilePayload[];
+export type { FilePayload, FileInput } from '../utils/files';
+
+export class JSHandle {
+    constructor(
+        private readonly _session: BridgeSession,
+        readonly _handleId: string,
+    ) {}
+
+    async evaluate<T>(fn: (handle: unknown, args?: unknown) => T, args?: unknown): Promise<T> {
+        const fnStr = typeof fn === 'function' ? fn.toString() : String(fn);
+        return this._session.sendCommand<T>({ type: 'handleEvaluate', handleId: this._handleId, fn: fnStr, args: args ?? null });
+    }
+
+    async getProperty(name: string): Promise<JSHandle> {
+        const childId = await this._session.sendCommand<string>({ type: 'handleGetProperty', handleId: this._handleId, name });
+        return new JSHandle(this._session, childId);
+    }
+
+    async jsonValue<T = unknown>(): Promise<T> {
+        return this._session.sendCommand<T>({ type: 'handleJsonValue', handleId: this._handleId });
+    }
+
+    async dispose(): Promise<void> {
+        await this._session.sendCommand({ type: 'disposeHandle', handleId: this._handleId });
+    }
+
+    asElement(): JSHandle { return this; }
+}
 
 const REQUEST_EVENTS = new Set(['request', 'response', 'requestfinished', 'requestfailed']);
 
@@ -169,8 +197,9 @@ export class Page extends EventEmitter {
 
     constructor(
         private readonly proxy: Proxy,
-        private readonly session: BridgeSession,
-        config: PageConfig = {}
+        readonly session: BridgeSession,
+        config: PageConfig = {},
+        context?: BrowserContext
     ) {
         super();
         this.defaultTimeout = config.actionTimeout ?? 10_000;
@@ -180,6 +209,7 @@ export class Page extends EventEmitter {
         this.mouse = new Mouse(session);
         this.touchscreen = new Touchscreen(session);
         this.request = new APIRequestContext();
+        if (context) this._browserContext = context;
         this.session.setEventListener((event, data) => this._handleBridgeEvent(event, data as Record<string, unknown>));
     }
 
@@ -300,24 +330,28 @@ export class Page extends EventEmitter {
     async goto(url: string, options?: GotoOptions): Promise<void> {
         return this._stepReporter(`page.goto(${JSON.stringify(url)})`, async () => {
             const timeout = options?.timeout ?? this.navigationTimeout;
-            (this.session as unknown as { isReady: boolean }).isReady = false;
+            this.session.resetReady();
             const proxiedUrl = this.proxy.openSession(url, this.session, { url: '' });
             this._navHistory = this._navHistory.slice(0, this._navIndex + 1);
             this._navHistory.push(proxiedUrl);
             this._navIndex = this._navHistory.length - 1;
             const readyPromise = this.session.waitForReady(timeout);
-            await this.session.sendCommand({ type: 'evaluate', expression: `location.href = ${JSON.stringify(proxiedUrl)}` }).catch(() => {});
-            await readyPromise;
+            let cmdError: Error | undefined;
+            await this.session.sendCommand({ type: 'evaluate', expression: `location.href = ${JSON.stringify(proxiedUrl)}` })
+                .catch(e => { cmdError = e as Error; });
+            await readyPromise.catch(timeoutErr => { throw cmdError ?? timeoutErr; });
         });
     }
 
     async reload(options?: { timeout?: number }): Promise<void> {
         return this._stepReporter('page.reload()', async () => {
             const timeout = options?.timeout ?? this.navigationTimeout;
-            (this.session as unknown as { isReady: boolean }).isReady = false;
+            this.session.resetReady();
             const readyPromise = this.session.waitForReady(timeout);
-            void this.session.sendCommand({ type: 'evaluate', expression: 'location.reload()' }).catch(() => {});
-            await readyPromise;
+            let cmdError: Error | undefined;
+            void this.session.sendCommand({ type: 'evaluate', expression: 'location.reload()' })
+                .catch(e => { cmdError = e as Error; });
+            await readyPromise.catch(timeoutErr => { throw cmdError ?? timeoutErr; });
         });
     }
 
@@ -327,10 +361,12 @@ export class Page extends EventEmitter {
             const timeout = options?.timeout ?? this.navigationTimeout;
             this._navIndex--;
             const prevUrl = this._navHistory[this._navIndex];
-            (this.session as unknown as { isReady: boolean }).isReady = false;
+            this.session.resetReady();
             const readyPromise = this.session.waitForReady(timeout);
-            await this.session.sendCommand({ type: 'evaluate', expression: `location.href = ${JSON.stringify(prevUrl)}` }).catch(() => {});
-            await readyPromise;
+            let cmdError: Error | undefined;
+            await this.session.sendCommand({ type: 'evaluate', expression: `location.href = ${JSON.stringify(prevUrl)}` })
+                .catch(e => { cmdError = e as Error; });
+            await readyPromise.catch(timeoutErr => { throw cmdError ?? timeoutErr; });
         });
     }
 
@@ -340,10 +376,12 @@ export class Page extends EventEmitter {
             const timeout = options?.timeout ?? this.navigationTimeout;
             this._navIndex++;
             const nextUrl = this._navHistory[this._navIndex];
-            (this.session as unknown as { isReady: boolean }).isReady = false;
+            this.session.resetReady();
             const readyPromise = this.session.waitForReady(timeout);
-            await this.session.sendCommand({ type: 'evaluate', expression: `location.href = ${JSON.stringify(nextUrl)}` }).catch(() => {});
-            await readyPromise;
+            let cmdError: Error | undefined;
+            await this.session.sendCommand({ type: 'evaluate', expression: `location.href = ${JSON.stringify(nextUrl)}` })
+                .catch(e => { cmdError = e as Error; });
+            await readyPromise.catch(timeoutErr => { throw cmdError ?? timeoutErr; });
         });
     }
 
@@ -397,7 +435,11 @@ export class Page extends EventEmitter {
     // --- Context / Frames ---
 
     context(): BrowserContext {
-        if (!this._browserContext) this._browserContext = new BrowserContext(this.session);
+        if (!this._browserContext) {
+            const ctx = new BrowserContext(() => Promise.resolve(this));
+            this._browserContext = ctx;
+            ctx._registerPage(this);
+        }
         return this._browserContext;
     }
 
@@ -447,8 +489,9 @@ export class Page extends EventEmitter {
     }
 
     getByText(text: string | RegExp): Locator {
-        const textStr = typeof text === 'string' ? text : text.source;
-        return this.locator(`body *:has-text("${textStr}")`);
+        if (text instanceof RegExp)
+            return this.locator('body *').filter({ hasText: text });
+        return this.locator(`body *:has-text("${text.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}")`);
     }
 
     getByLabel(text: string): Locator {
@@ -464,13 +507,19 @@ export class Page extends EventEmitter {
     }
 
     getByAltText(text: string | RegExp): Locator {
-        const textStr = typeof text === 'string' ? text : text.source;
-        return this.locator(`[alt="${textStr}"], [alt*="${textStr}"]`);
+        if (text instanceof RegExp)
+            return new Locator(this.session, [{ kind: 'getByAttr', attr: 'alt', value: Locator._serText(text) }], this.defaultTimeout, this.expectTimeout, this._stepReporter, this);
+        return this.locator(`[alt="${Locator._cssAttrValue(text)}"]`);
     }
 
     getByTitle(text: string | RegExp): Locator {
-        const textStr = typeof text === 'string' ? text : text.source;
-        return this.locator(`[title="${textStr}"]`);
+        if (text instanceof RegExp)
+            return new Locator(this.session, [{ kind: 'getByAttr', attr: 'title', value: Locator._serText(text) }], this.defaultTimeout, this.expectTimeout, this._stepReporter, this);
+        return this.locator(`[title="${Locator._cssAttrValue(text)}"]`);
+    }
+
+    getByXPath(expr: string): Locator {
+        return new Locator(this.session, [{ kind: 'xpath', expr }], this.defaultTimeout, this.expectTimeout, this._stepReporter, this);
     }
 
     // --- Direct element actions ---
@@ -521,40 +570,16 @@ export class Page extends EventEmitter {
         options?: { timeout?: number }
     ): Promise<void> {
         return this._stepReporter(`page.setInputFiles(${JSON.stringify(selector)})`, async () => {
-            const arr = Array.isArray(files) ? files : [files];
-            const payloads: FilePayload[] = arr.map(f => {
-                if (typeof f === 'string') {
-                    const buf = readFileSync(f);
-                    const name = f.split('/').pop() ?? f;
-                    return { name, mimeType: 'application/octet-stream', buffer: buf };
-                }
-                return f;
-            });
-            const serialized = payloads.map(p => ({
-                name: p.name,
-                mimeType: p.mimeType,
-                base64: p.buffer.toString('base64'),
-            }));
+            const serialized = serializeFiles(files);
             const loc = this.locator(selector);
             await loc.waitFor({ timeout: options?.timeout ?? this.defaultTimeout });
             await this.session.sendCommand({
                 type: 'evaluate',
                 expression: `(function() {
-                    var payloads = ${JSON.stringify(serialized)};
                     var els = resolveSteps(${JSON.stringify(loc['_steps'])});
                     var el = els[0];
                     if (!el) throw new Error('Element not found for setInputFiles');
-                    var dt = new DataTransfer();
-                    payloads.forEach(function(p) {
-                        var bytes = atob(p.base64);
-                        var arr = new Uint8Array(bytes.length);
-                        for (var i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
-                        var file = new File([arr], p.name, { type: p.mimeType });
-                        dt.items.add(file);
-                    });
-                    Object.defineProperty(el, 'files', { value: dt.files, configurable: true });
-                    el.dispatchEvent(new Event('input', { bubbles: true }));
-                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                    ${fileTransferScript(serialized)}
                 })()`,
             });
         });
@@ -651,7 +676,7 @@ export class Page extends EventEmitter {
 
     async waitForNavigation(options?: { timeout?: number; waitUntil?: WaitUntilState }): Promise<void> {
         const timeout = options?.timeout ?? this.navigationTimeout;
-        (this.session as unknown as { isReady: boolean }).isReady = false;
+        this.session.resetReady();
         await this.session.waitForReady(timeout);
         await this.waitForLoadState(options?.waitUntil ?? 'load');
     }
@@ -753,8 +778,12 @@ export class Page extends EventEmitter {
         return this.session.sendCommand<T>({ type: 'evaluate', expression });
     }
 
-    async evaluateHandle(fn: ((...args: unknown[]) => unknown) | string, ...args: unknown[]): Promise<unknown> {
-        return this.evaluate(fn as (...args: unknown[]) => unknown, ...args);
+    async evaluateHandle(fn: ((...args: unknown[]) => unknown) | string, ...args: unknown[]): Promise<JSHandle> {
+        const handleId = randomUUID();
+        const fnStr = typeof fn === 'function' ? fn.toString() : `(${String(fn)})`;
+        const expression = `(${fnStr})(${args.length > 0 ? JSON.stringify(args.length === 1 ? args[0] : args) : ''})`;
+        await this.session.sendCommand({ type: 'storeHandle', handleId, expression, args: args[0] ?? null });
+        return new JSHandle(this.session, handleId);
     }
 
     async dispatchEvent(selector: string, type: string, eventInit?: Record<string, unknown>, options?: { timeout?: number }): Promise<void> {
@@ -776,6 +805,77 @@ export class Page extends EventEmitter {
         })()`;
         await this.addInitScript(wrapper);
         await this.evaluate(wrapper).catch(() => {});
+    }
+
+    async exposeBinding(
+        name: string,
+        fn: (source: { url: string }, ...args: unknown[]) => unknown
+    ): Promise<void> {
+        this.session.registerExposedBinding(name, fn as (source: Record<string, unknown>, ...args: unknown[]) => unknown);
+        const wrapper = `(function() {
+            window[${JSON.stringify(name)}] = function() {
+                var args = Array.prototype.slice.call(arguments);
+                var source = { url: location.href };
+                return window.__hhBridge('bridge_expose_binding_call', { expName: ${JSON.stringify(name)}, source: source, args: args }, 30000)
+                    .then(function(r) { return r && 'value' in r ? r.value : undefined; });
+            };
+        })()`;
+        await this.addInitScript(wrapper);
+        await this.evaluate(wrapper).catch(() => {});
+    }
+
+    async emulateMedia(params: {
+        media?: 'screen' | 'print' | null;
+        colorScheme?: 'light' | 'dark' | 'no-preference' | null;
+        reducedMotion?: 'reduce' | 'no-preference' | null;
+        forcedColors?: 'active' | 'none' | null;
+    } = {}): Promise<void> {
+        const overrides = {
+            media:        params.media        ?? null,
+            colorScheme:  params.colorScheme  ?? null,
+            reducedMotion: params.reducedMotion ?? null,
+            forcedColors: params.forcedColors ?? null,
+        };
+        const script = `(function() {
+            var ov = ${JSON.stringify(overrides)};
+            var orig = window.matchMedia;
+            function makeResult(matches, query) {
+                return { matches: matches, media: query, onchange: null,
+                    addListener: function() {}, removeListener: function() {},
+                    addEventListener: function() {}, removeEventListener: function() {},
+                    dispatchEvent: function() { return false; } };
+            }
+            window.matchMedia = function(query) {
+                var q = (query || '').toLowerCase();
+                if (ov.colorScheme !== null && q.indexOf('prefers-color-scheme') !== -1)
+                    return makeResult(q.indexOf(ov.colorScheme) !== -1, query);
+                if (ov.reducedMotion !== null && q.indexOf('prefers-reduced-motion') !== -1)
+                    return makeResult(q.indexOf(ov.reducedMotion) !== -1, query);
+                if (ov.forcedColors !== null && q.indexOf('forced-colors') !== -1)
+                    return makeResult(q.indexOf(ov.forcedColors) !== -1, query);
+                if (ov.media !== null && (q === 'screen' || q === 'print'))
+                    return makeResult(q === ov.media, query);
+                return orig ? orig.call(window, query) : makeResult(false, query);
+            };
+        })()`;
+        await this.addInitScript(script);
+        await this.evaluate(script).catch(() => {});
+    }
+
+    workers(): [] {
+        return [];
+    }
+
+    async pause(): Promise<never> {
+        throw new Error('pause() is not supported by playwright-hammerhead');
+    }
+
+    async bringToFront(): Promise<never> {
+        throw new Error('bringToFront() is not supported by playwright-hammerhead');
+    }
+
+    async pdf(): Promise<never> {
+        throw new Error('pdf() is not supported by playwright-hammerhead — Safari does not support CDP-based PDF generation');
     }
 
     async setExtraHTTPHeaders(headers: Record<string, string>): Promise<void> {
@@ -944,41 +1044,10 @@ export class Page extends EventEmitter {
     // --- Screenshot via modern-screenshot ---
 
     async screenshot(options?: ScreenshotOptions): Promise<Buffer> {
-        const libCode = getModernScreenshotCode();
-        const isJpeg = options?.type === 'jpeg';
-        const quality = options?.quality ?? (isJpeg ? 0.92 : 1);
-        const msType = isJpeg ? 'image/jpeg' : 'image/png';
-        const fullPage = options?.fullPage ?? false;
-
-        const expression = `
-            new Promise(function(resolve, reject) {
-                try {
-                    if (!window.__modernScreenshotLoaded) {
-                        var s = document.createElement('script');
-                        s.textContent = ${JSON.stringify(libCode)};
-                        document.head.appendChild(s);
-                        window.__modernScreenshotLoaded = true;
-                    }
-                    var target = document.documentElement;
-                    var opts = { type: ${JSON.stringify(msType)}, quality: ${quality} };
-                    if (${fullPage}) {
-                        opts.width = document.documentElement.scrollWidth;
-                        opts.height = document.documentElement.scrollHeight;
-                    }
-                    var fn = ${isJpeg} ? window.modernScreenshot.domToJpeg : window.modernScreenshot.domToPng;
-                    fn(target, opts).then(resolve).catch(reject);
-                } catch(e) { reject(e instanceof Error ? e.message : String(e)); }
-            })
-        `;
-
+        const expression = buildScreenshotExpression('document.documentElement', options);
         const dataUrl = await this.session.sendCommand<string>({ type: 'evaluate', expression });
-        if (!dataUrl || typeof dataUrl !== 'string') return Buffer.alloc(0);
-
-        const base64 = dataUrl.split(',')[1] ?? '';
-        const buffer = Buffer.from(base64, 'base64');
-
+        const buffer = decodeScreenshotDataUrl(dataUrl);
         if (options?.path) writeFileSync(options.path, buffer);
-
         return buffer;
     }
 
