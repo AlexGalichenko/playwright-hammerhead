@@ -28,6 +28,7 @@ type SerializedText = string | { source: string; flags: string };
 //   iframe — cross into an iframe's contentDocument (used by FrameLocator)
 export type SelectorStep =
     | { kind: 'css';         sel: string }
+    | { kind: 'xpath';       expr: string }
     | { kind: 'nth';         index: number }
     | { kind: 'filter';      hasText?: SerializedText; hasNotText?: SerializedText; hasSteps?: SelectorStep[]; hasNotSteps?: SelectorStep[] }
     | { kind: 'and';         steps: SelectorStep[] }
@@ -41,10 +42,13 @@ export class Locator {
     readonly _stepReporter: StepReporter;
     private readonly _page: Page | undefined;
 
-    /** First CSS selector in the chain — kept for error messages. */
+    /** First CSS or XPath selector in the chain — kept for error messages. */
     get selector(): string {
-        const first = this._steps.find(s => s.kind === 'css') as { kind: 'css'; sel: string } | undefined;
-        return first?.sel ?? '';
+        const first = this._steps.find(s => s.kind === 'css' || s.kind === 'xpath');
+        if (!first) return '';
+        if (first.kind === 'css') return first.sel;
+        if (first.kind === 'xpath') return 'xpath=' + first.expr;
+        return '';
     }
 
     constructor(
@@ -77,6 +81,10 @@ export class Locator {
                 result = result
                     ? `${result}.locator(${JSON.stringify(step.sel)})`
                     : `locator(${JSON.stringify(step.sel)})`;
+            } else if (step.kind === 'xpath') {
+                result = result
+                    ? `${result}.locator(${JSON.stringify('xpath=' + step.expr)})`
+                    : `locator(${JSON.stringify('xpath=' + step.expr)})`;
             } else if (step.kind === 'nth') {
                 result = `${result}.nth(${step.index})`;
             } else if (step.kind === 'filter') {
@@ -120,6 +128,10 @@ export class Locator {
         stepReporter: StepReporter = noopReporter,
         page?: Page,
     ): Locator {
+        const xpathExpr = Locator._extractXPath(rawSelector);
+        if (xpathExpr !== null) {
+            return new Locator(session, [{ kind: 'xpath', expr: xpathExpr }], defaultTimeout, expectTimeout, stepReporter, page);
+        }
         const { cleanSelector, hasText, hasNotText } = Locator._parseHasTextPseudo(rawSelector);
         const steps: SelectorStep[] = [{ kind: 'css', sel: cleanSelector }];
         if (hasText !== undefined || hasNotText !== undefined) {
@@ -129,6 +141,14 @@ export class Locator {
             steps.push(f);
         }
         return new Locator(session, steps, defaultTimeout, expectTimeout, stepReporter, page);
+    }
+
+    /** Returns the XPath expression if the selector is an XPath, otherwise null. */
+    private static _extractXPath(selector: string): string | null {
+        const trimmed = selector.trim();
+        if (trimmed.startsWith('xpath=')) return trimmed.slice('xpath='.length);
+        if (trimmed.startsWith('//') || trimmed.startsWith('..')) return trimmed;
+        return null;
     }
 
     // -------------------------------------------------------------------------
@@ -499,6 +519,10 @@ export class Locator {
     }
 
     locator(subSelector: string): Locator {
+        const xpathExpr = Locator._extractXPath(subSelector);
+        if (xpathExpr !== null) {
+            return new Locator(this.session, [...this._steps, { kind: 'xpath', expr: xpathExpr }], this.defaultTimeout, this._expectTimeout, this._stepReporter, this._page);
+        }
         const { cleanSelector, hasText, hasNotText } = Locator._parseHasTextPseudo(subSelector);
         const steps: SelectorStep[] = [...this._steps, { kind: 'css', sel: cleanSelector }];
         if (hasText !== undefined || hasNotText !== undefined) {
@@ -508,6 +532,10 @@ export class Locator {
             steps.push(f);
         }
         return new Locator(this.session, steps, this.defaultTimeout, this._expectTimeout, this._stepReporter, this._page);
+    }
+
+    getByXPath(expr: string): Locator {
+        return new Locator(this.session, [...this._steps, { kind: 'xpath', expr }], this.defaultTimeout, this._expectTimeout, this._stepReporter, this._page);
     }
 
     getByRole(role: string, options?: { name?: string | RegExp }): Locator {
@@ -822,6 +850,10 @@ export class FrameLocator {
             this._stepReporter,
             this._page,
         );
+    }
+
+    getByXPath(expr: string): Locator {
+        return new Locator(this._session, [...this._steps, { kind: 'xpath', expr }], this._defaultTimeout, this._expectTimeout, this._stepReporter, this._page);
     }
 
     getByRole(role: string, options?: { name?: string | RegExp }): Locator {

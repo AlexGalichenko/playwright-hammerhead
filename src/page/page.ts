@@ -479,6 +479,10 @@ export class Page extends EventEmitter {
         return this.locator(`[title="${textStr}"]`);
     }
 
+    getByXPath(expr: string): Locator {
+        return new Locator(this.session, [{ kind: 'xpath', expr }], this.defaultTimeout, this.expectTimeout, this._stepReporter, this);
+    }
+
     // --- Direct element actions ---
 
     async click(selector: string, options?: { timeout?: number }): Promise<void> {

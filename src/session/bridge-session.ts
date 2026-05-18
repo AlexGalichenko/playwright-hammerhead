@@ -273,6 +273,21 @@ export class BridgeSession extends Session {
                     }
                 }
                 contexts = elements;
+            } else if (step.kind === 'xpath') {
+                var xSeen = [];
+                elements = [];
+                for (var xci = 0; xci < contexts.length; xci++) {
+                    var xctx = contexts[xci];
+                    var xdoc = xctx.ownerDocument || xctx;
+                    try {
+                        var xres = xdoc.evaluate(step.expr, xctx, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+                        for (var xni = 0; xni < xres.snapshotLength; xni++) {
+                            var xnode = xres.snapshotItem(xni);
+                            if (xnode && xSeen.indexOf(xnode) === -1) { xSeen.push(xnode); elements.push(xnode); }
+                        }
+                    } catch(_xe) {}
+                }
+                contexts = elements;
             } else if (step.kind === 'nth') {
                 var idx = step.index < 0 ? elements.length + step.index : step.index;
                 elements = (idx >= 0 && idx < elements.length) ? [elements[idx]] : [];
