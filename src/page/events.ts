@@ -1,10 +1,9 @@
-import { readFileSync } from 'fs';
 import { BridgeSession } from '../session/bridge-session';
+import { serializeFiles, fileTransferScript } from '../utils/files';
+import type { FileInput } from '../utils/files';
 import { Locator } from './locator';
 
 type WaitUntilState = 'domcontentloaded' | 'load' | 'networkidle';
-type FilePayload = { name: string; mimeType: string; buffer: Buffer };
-type FileInput = string | FilePayload | (string | FilePayload)[];
 
 export class ConsoleMessage {
     constructor(
@@ -122,33 +121,13 @@ export class FileChooser {
     accept(): string { return this._accept; }
 
     async setFiles(files: FileInput): Promise<void> {
-        const arr = Array.isArray(files) ? files : [files];
-        const payloads: FilePayload[] = arr.map(f => {
-            if (typeof f === 'string') {
-                const buf = readFileSync(f);
-                return { name: f.split('/').pop() ?? f, mimeType: 'application/octet-stream', buffer: buf };
-            }
-            return f;
-        });
-        const serialized = payloads.map(p => ({
-            name: p.name, mimeType: p.mimeType, base64: p.buffer.toString('base64'),
-        }));
+        const serialized = serializeFiles(files);
         await this._session.sendCommand({
             type: 'evaluate',
             expression: `(function() {
                 var el = window.__hhLastFileInput;
                 if (!el) throw new Error('No pending file chooser');
-                var payloads = ${JSON.stringify(serialized)};
-                var dt = new DataTransfer();
-                payloads.forEach(function(p) {
-                    var bytes = atob(p.base64);
-                    var arr = new Uint8Array(bytes.length);
-                    for (var i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
-                    dt.items.add(new File([arr], p.name, { type: p.mimeType }));
-                });
-                Object.defineProperty(el, 'files', { value: dt.files, configurable: true });
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-                el.dispatchEvent(new Event('change', { bubbles: true }));
+                ${fileTransferScript(serialized)}
                 window.__hhLastFileInput = null;
             })()`,
         });

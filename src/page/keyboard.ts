@@ -8,11 +8,11 @@ export class Keyboard {
     }
 
     async down(key: string): Promise<void> {
-        await this.session.sendCommand({ type: 'keyPress', key });
+        await this.session.sendCommand({ type: 'keyDown', key });
     }
 
-    async up(_key: string): Promise<void> {
-        // Key up is implicit after keyPress; no separate bridge command needed
+    async up(key: string): Promise<void> {
+        await this.session.sendCommand({ type: 'keyUp', key });
     }
 
     async type(text: string, options?: { delay?: number }): Promise<void> {

@@ -16,7 +16,11 @@ export interface Cookie {
 
 export type PageFactory = (ctx: BrowserContext) => Promise<Page>;
 
-export interface IBrowser {}
+export interface IBrowser {
+    contexts(): BrowserContext[];
+    pages(): Page[];
+    close(): Promise<void>;
+}
 
 interface ContextRoute {
     pattern: UrlPattern;
@@ -80,18 +84,18 @@ export class BrowserContext extends EventEmitter {
     }
 
     private async _applyAsyncSettingsToPage(page: Page): Promise<void> {
-        if (this._extraHTTPHeaders) await page.setExtraHTTPHeaders(this._extraHTTPHeaders).catch(() => {});
-        for (const [name, fn] of this._exposedFunctions) {
-            await page.exposeFunction(name, fn).catch(() => {});
-        }
-        for (const [name, fn] of this._exposedBindings) {
-            await page.exposeBinding(name, fn).catch(() => {});
-        }
-        for (const r of this._contextRoutes) {
-            await page.route(r.pattern, r.handler).catch(() => {});
-        }
-        if (this._geolocation !== null) await this._applyGeolocationToPage(page).catch(() => {});
-        if (this._offline) await this._applyOfflineToPage(page).catch(() => {});
+        const errors: Error[] = [];
+        const guard = (p: Promise<void>) => p.catch(e => errors.push(e instanceof Error ? e : new Error(String(e))));
+
+        if (this._extraHTTPHeaders) await guard(page.setExtraHTTPHeaders(this._extraHTTPHeaders));
+        for (const [name, fn] of this._exposedFunctions) await guard(page.exposeFunction(name, fn));
+        for (const [name, fn] of this._exposedBindings) await guard(page.exposeBinding(name, fn));
+        for (const r of this._contextRoutes) await guard(page.route(r.pattern, r.handler));
+        if (this._geolocation !== null) await guard(this._applyGeolocationToPage(page));
+        if (this._offline) await guard(this._applyOfflineToPage(page));
+
+        if (errors.length > 0)
+            throw new Error(`Failed to apply context settings: ${errors.map(e => e.message).join('; ')}`);
     }
 
     pages(): Page[] {
@@ -124,9 +128,20 @@ export class BrowserContext extends EventEmitter {
         return null;
     }
 
-    async cookies(_urls?: string | string[]): Promise<Cookie[]> {
+    async cookies(urls?: string | string[]): Promise<Cookie[]> {
         const session = this._activeSession();
         if (!session) return [];
+
+        if (urls !== undefined) {
+            const urlList = Array.isArray(urls) ? urls : [urls];
+            const currentUrl = await session.sendCommand<string>({ type: 'evaluate', expression: 'location.href' });
+            const currentOrigin = currentUrl ? new URL(currentUrl).origin : null;
+            const matches = urlList.some(u => {
+                try { return new URL(u).origin === currentOrigin; } catch { return false; }
+            });
+            if (!matches) return [];
+        }
+
         const raw = await session.sendCommand<string>({ type: 'evaluate', expression: 'document.cookie' });
         if (!raw) return [];
         return raw.split(';').map(c => c.trim()).filter(Boolean).map(pair => {

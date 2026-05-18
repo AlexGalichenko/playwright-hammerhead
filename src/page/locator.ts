@@ -1,8 +1,9 @@
-import { readFileSync, writeFileSync } from 'fs';
+import { writeFileSync } from 'fs';
 import { BridgeSession } from '../session/bridge-session';
-import { getModernScreenshotCode } from '../utils/screenshot';
+import { buildScreenshotExpression, decodeScreenshotDataUrl } from '../utils/screenshot';
+import { serializeFiles, fileTransferScript } from '../utils/files';
+import type { FilePayload, FileInput } from '../utils/files';
 import type { Page } from './page';
-import type { FilePayload } from './page';
 
 export type StepReporter = <T>(title: string, fn: () => Promise<T>) => Promise<T>;
 
@@ -34,7 +35,8 @@ export type SelectorStep =
     | { kind: 'and';         steps: SelectorStep[] }
     | { kind: 'or';          steps: SelectorStep[] }
     | { kind: 'iframe';      sel: string; index?: number }
-    | { kind: 'getByLabel';  text: string };
+    | { kind: 'getByLabel';  text: string }
+    | { kind: 'getByAttr';   attr: string; value: SerializedText };
 
 export class Locator {
     readonly _steps: SelectorStep[];
@@ -155,8 +157,12 @@ export class Locator {
     // Private helpers
     // -------------------------------------------------------------------------
 
-    private static _serText(v: string | RegExp): SerializedText {
+    static _serText(v: string | RegExp): SerializedText {
         return v instanceof RegExp ? { source: v.source, flags: v.flags } : v;
+    }
+
+    static _cssAttrValue(s: string): string {
+        return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
     }
 
     // Strips :has-text(...) / :has-not-text(...) Playwright pseudo-classes and
@@ -547,8 +553,9 @@ export class Locator {
     }
 
     getByText(text: string | RegExp): Locator {
-        const t = typeof text === 'string' ? text : text.source;
-        return this.locator(`body *:has-text("${t}")`);
+        if (text instanceof RegExp)
+            return this.locator('body *').filter({ hasText: text });
+        return this.locator(`body *:has-text("${Locator._cssAttrValue(text)}")`);
     }
 
     getByLabel(text: string): Locator {
@@ -556,21 +563,23 @@ export class Locator {
     }
 
     getByPlaceholder(placeholder: string): Locator {
-        return this.locator(`[placeholder="${placeholder}"]`);
+        return this.locator(`[placeholder="${Locator._cssAttrValue(placeholder)}"]`);
     }
 
     getByTestId(testId: string): Locator {
-        return this.locator(`[data-testid="${testId}"]`);
+        return this.locator(`[data-testid="${Locator._cssAttrValue(testId)}"]`);
     }
 
     getByAltText(text: string | RegExp): Locator {
-        const t = typeof text === 'string' ? text : text.source;
-        return this.locator(`[alt="${t}"], [alt*="${t}"]`);
+        if (text instanceof RegExp)
+            return new Locator(this.session, [...this._steps, { kind: 'getByAttr', attr: 'alt', value: Locator._serText(text) }], this.defaultTimeout, this._expectTimeout, this._stepReporter, this._page);
+        return this.locator(`[alt="${Locator._cssAttrValue(text)}"]`);
     }
 
     getByTitle(text: string | RegExp): Locator {
-        const t = typeof text === 'string' ? text : text.source;
-        return this.locator(`[title="${t}"]`);
+        if (text instanceof RegExp)
+            return new Locator(this.session, [...this._steps, { kind: 'getByAttr', attr: 'title', value: Locator._serText(text) }], this.defaultTimeout, this._expectTimeout, this._stepReporter, this._page);
+        return this.locator(`[title="${Locator._cssAttrValue(text)}"]`);
     }
 
     filter(options: LocatorFilter): Locator {
@@ -670,37 +679,19 @@ export class Locator {
     }
 
     async setInputFiles(
-        files: string | string[] | FilePayload | FilePayload[],
+        files: FileInput,
         options?: { timeout?: number }
     ): Promise<void> {
         return this._runStep(`${this._description()}.setInputFiles(...)`, async () => {
-            const arr = Array.isArray(files) ? files : [files];
-            const payloads = arr.map(f => {
-                if (typeof f === 'string') {
-                    const buf = readFileSync(f);
-                    const name = f.split('/').pop() ?? f;
-                    return { name, mimeType: 'application/octet-stream', base64: buf.toString('base64') };
-                }
-                return { name: f.name, mimeType: f.mimeType, base64: f.buffer.toString('base64') };
-            });
+            const serialized = serializeFiles(files);
             await this.waitFor({ timeout: options?.timeout ?? this.defaultTimeout });
             await this.session.sendCommand({
                 type: 'evaluate',
                 expression: `(function() {
-                    var payloads = ${JSON.stringify(payloads)};
                     var els = resolveSteps(${JSON.stringify(this._steps)});
                     var el = els[0];
                     if (!el) throw new Error('Element not found for setInputFiles');
-                    var dt = new DataTransfer();
-                    payloads.forEach(function(p) {
-                        var bytes = atob(p.base64);
-                        var arr = new Uint8Array(bytes.length);
-                        for (var i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
-                        dt.items.add(new File([arr], p.name, { type: p.mimeType }));
-                    });
-                    Object.defineProperty(el, 'files', { value: dt.files, configurable: true });
-                    el.dispatchEvent(new Event('input', { bubbles: true }));
-                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                    ${fileTransferScript(serialized)}
                 })()`,
             });
         });
@@ -765,33 +756,10 @@ export class Locator {
     // -------------------------------------------------------------------------
 
     async screenshot(options?: { path?: string; type?: 'png' | 'jpeg'; quality?: number }): Promise<Buffer> {
-        const libCode = getModernScreenshotCode();
-        const isJpeg = options?.type === 'jpeg';
-        const quality = options?.quality ?? (isJpeg ? 0.92 : 1);
-
-        // resolveSteps is defined in the bridge IIFE scope and accessible via eval's scope chain
-        const expression = `
-            new Promise(function(resolve, reject) {
-                try {
-                    if (!window.__modernScreenshotLoaded) {
-                        var s = document.createElement('script');
-                        s.textContent = ${JSON.stringify(libCode)};
-                        document.head.appendChild(s);
-                        window.__modernScreenshotLoaded = true;
-                    }
-                    var els = resolveSteps(${JSON.stringify(this._steps)});
-                    var target = els[0];
-                    if (!target) { reject(new Error('Element not found')); return; }
-                    var fn = ${isJpeg} ? window.modernScreenshot.domToJpeg : window.modernScreenshot.domToPng;
-                    fn(target, { type: ${JSON.stringify(isJpeg ? 'image/jpeg' : 'image/png')}, quality: ${quality} }).then(resolve).catch(reject);
-                } catch(e) { reject(e instanceof Error ? e.message : String(e)); }
-            })
-        `;
-
+        const targetExpr = `resolveSteps(${JSON.stringify(this._steps)})[0]`;
+        const expression = buildScreenshotExpression(targetExpr, options);
         const dataUrl = await this.session.sendCommand<string>({ type: 'evaluate', expression });
-        if (!dataUrl || typeof dataUrl !== 'string') return Buffer.alloc(0);
-        const base64 = dataUrl.split(',')[1] ?? '';
-        const buffer = Buffer.from(base64, 'base64');
+        const buffer = decodeScreenshotDataUrl(dataUrl);
         if (options?.path) writeFileSync(options.path, buffer);
         return buffer;
     }
@@ -865,8 +833,9 @@ export class FrameLocator {
     }
 
     getByText(text: string | RegExp): Locator {
-        const t = typeof text === 'string' ? text : text.source;
-        return this.locator(`body *:has-text("${t}")`);
+        if (text instanceof RegExp)
+            return this.locator('body *').filter({ hasText: text });
+        return this.locator(`body *:has-text("${Locator._cssAttrValue(text)}")`);
     }
 
     getByLabel(text: string): Locator {
@@ -874,21 +843,23 @@ export class FrameLocator {
     }
 
     getByPlaceholder(placeholder: string): Locator {
-        return this.locator(`[placeholder="${placeholder}"]`);
+        return this.locator(`[placeholder="${Locator._cssAttrValue(placeholder)}"]`);
     }
 
     getByTestId(testId: string): Locator {
-        return this.locator(`[data-testid="${testId}"]`);
+        return this.locator(`[data-testid="${Locator._cssAttrValue(testId)}"]`);
     }
 
     getByAltText(text: string | RegExp): Locator {
-        const t = typeof text === 'string' ? text : text.source;
-        return this.locator(`[alt="${t}"], [alt*="${t}"]`);
+        if (text instanceof RegExp)
+            return new Locator(this._session, [...this._steps, { kind: 'getByAttr', attr: 'alt', value: Locator._serText(text) }], this._defaultTimeout, this._expectTimeout, this._stepReporter, this._page);
+        return this.locator(`[alt="${Locator._cssAttrValue(text)}"]`);
     }
 
     getByTitle(text: string | RegExp): Locator {
-        const t = typeof text === 'string' ? text : text.source;
-        return this.locator(`[title="${t}"]`);
+        if (text instanceof RegExp)
+            return new Locator(this._session, [...this._steps, { kind: 'getByAttr', attr: 'title', value: Locator._serText(text) }], this._defaultTimeout, this._expectTimeout, this._stepReporter, this._page);
+        return this.locator(`[title="${Locator._cssAttrValue(text)}"]`);
     }
 
     // ─── Nested frame ─────────────────────────────────────────────────────────

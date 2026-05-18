@@ -1,4 +1,5 @@
 import { readFileSync, writeFileSync } from 'fs';
+import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'events';
 import { Proxy, RequestFilterRule, RequestInfo, ResponseEvent } from 'testcafe-hammerhead';
 import { BridgeSession } from '../session/bridge-session';
@@ -11,7 +12,8 @@ import {
     WebSocketEvent, WorkerEvent, PageResponse,
 } from './events';
 import { openSafariAtUrl, closeSafariWindowByUrlFragment } from '../utils/safari';
-import { getModernScreenshotCode } from '../utils/screenshot';
+import { buildScreenshotExpression, decodeScreenshotDataUrl } from '../utils/screenshot';
+import { serializeFiles, fileTransferScript, type FileInput, type FilePayload } from '../utils/files';
 import { APIRequestContext } from './request';
 import { Touchscreen } from './touchscreen';
 import { BrowserContext } from '../browser/browser-context';
@@ -78,8 +80,34 @@ export interface ScreenshotOptions {
     quality?: number;
 }
 
-export type FilePayload = { name: string; mimeType: string; buffer: Buffer };
-export type FileInput = string | string[] | FilePayload | FilePayload[];
+export type { FilePayload, FileInput } from '../utils/files';
+
+export class JSHandle {
+    constructor(
+        private readonly _session: BridgeSession,
+        readonly _handleId: string,
+    ) {}
+
+    async evaluate<T>(fn: (handle: unknown, args?: unknown) => T, args?: unknown): Promise<T> {
+        const fnStr = typeof fn === 'function' ? fn.toString() : String(fn);
+        return this._session.sendCommand<T>({ type: 'handleEvaluate', handleId: this._handleId, fn: fnStr, args: args ?? null });
+    }
+
+    async getProperty(name: string): Promise<JSHandle> {
+        const childId = await this._session.sendCommand<string>({ type: 'handleGetProperty', handleId: this._handleId, name });
+        return new JSHandle(this._session, childId);
+    }
+
+    async jsonValue<T = unknown>(): Promise<T> {
+        return this._session.sendCommand<T>({ type: 'handleJsonValue', handleId: this._handleId });
+    }
+
+    async dispose(): Promise<void> {
+        await this._session.sendCommand({ type: 'disposeHandle', handleId: this._handleId });
+    }
+
+    asElement(): JSHandle { return this; }
+}
 
 const REQUEST_EVENTS = new Set(['request', 'response', 'requestfinished', 'requestfailed']);
 
@@ -302,24 +330,28 @@ export class Page extends EventEmitter {
     async goto(url: string, options?: GotoOptions): Promise<void> {
         return this._stepReporter(`page.goto(${JSON.stringify(url)})`, async () => {
             const timeout = options?.timeout ?? this.navigationTimeout;
-            (this.session as unknown as { isReady: boolean }).isReady = false;
+            this.session.resetReady();
             const proxiedUrl = this.proxy.openSession(url, this.session, { url: '' });
             this._navHistory = this._navHistory.slice(0, this._navIndex + 1);
             this._navHistory.push(proxiedUrl);
             this._navIndex = this._navHistory.length - 1;
             const readyPromise = this.session.waitForReady(timeout);
-            await this.session.sendCommand({ type: 'evaluate', expression: `location.href = ${JSON.stringify(proxiedUrl)}` }).catch(() => {});
-            await readyPromise;
+            let cmdError: Error | undefined;
+            await this.session.sendCommand({ type: 'evaluate', expression: `location.href = ${JSON.stringify(proxiedUrl)}` })
+                .catch(e => { cmdError = e as Error; });
+            await readyPromise.catch(timeoutErr => { throw cmdError ?? timeoutErr; });
         });
     }
 
     async reload(options?: { timeout?: number }): Promise<void> {
         return this._stepReporter('page.reload()', async () => {
             const timeout = options?.timeout ?? this.navigationTimeout;
-            (this.session as unknown as { isReady: boolean }).isReady = false;
+            this.session.resetReady();
             const readyPromise = this.session.waitForReady(timeout);
-            void this.session.sendCommand({ type: 'evaluate', expression: 'location.reload()' }).catch(() => {});
-            await readyPromise;
+            let cmdError: Error | undefined;
+            void this.session.sendCommand({ type: 'evaluate', expression: 'location.reload()' })
+                .catch(e => { cmdError = e as Error; });
+            await readyPromise.catch(timeoutErr => { throw cmdError ?? timeoutErr; });
         });
     }
 
@@ -329,10 +361,12 @@ export class Page extends EventEmitter {
             const timeout = options?.timeout ?? this.navigationTimeout;
             this._navIndex--;
             const prevUrl = this._navHistory[this._navIndex];
-            (this.session as unknown as { isReady: boolean }).isReady = false;
+            this.session.resetReady();
             const readyPromise = this.session.waitForReady(timeout);
-            await this.session.sendCommand({ type: 'evaluate', expression: `location.href = ${JSON.stringify(prevUrl)}` }).catch(() => {});
-            await readyPromise;
+            let cmdError: Error | undefined;
+            await this.session.sendCommand({ type: 'evaluate', expression: `location.href = ${JSON.stringify(prevUrl)}` })
+                .catch(e => { cmdError = e as Error; });
+            await readyPromise.catch(timeoutErr => { throw cmdError ?? timeoutErr; });
         });
     }
 
@@ -342,10 +376,12 @@ export class Page extends EventEmitter {
             const timeout = options?.timeout ?? this.navigationTimeout;
             this._navIndex++;
             const nextUrl = this._navHistory[this._navIndex];
-            (this.session as unknown as { isReady: boolean }).isReady = false;
+            this.session.resetReady();
             const readyPromise = this.session.waitForReady(timeout);
-            await this.session.sendCommand({ type: 'evaluate', expression: `location.href = ${JSON.stringify(nextUrl)}` }).catch(() => {});
-            await readyPromise;
+            let cmdError: Error | undefined;
+            await this.session.sendCommand({ type: 'evaluate', expression: `location.href = ${JSON.stringify(nextUrl)}` })
+                .catch(e => { cmdError = e as Error; });
+            await readyPromise.catch(timeoutErr => { throw cmdError ?? timeoutErr; });
         });
     }
 
@@ -453,8 +489,9 @@ export class Page extends EventEmitter {
     }
 
     getByText(text: string | RegExp): Locator {
-        const textStr = typeof text === 'string' ? text : text.source;
-        return this.locator(`body *:has-text("${textStr}")`);
+        if (text instanceof RegExp)
+            return this.locator('body *').filter({ hasText: text });
+        return this.locator(`body *:has-text("${text.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}")`);
     }
 
     getByLabel(text: string): Locator {
@@ -470,13 +507,15 @@ export class Page extends EventEmitter {
     }
 
     getByAltText(text: string | RegExp): Locator {
-        const textStr = typeof text === 'string' ? text : text.source;
-        return this.locator(`[alt="${textStr}"], [alt*="${textStr}"]`);
+        if (text instanceof RegExp)
+            return new Locator(this.session, [{ kind: 'getByAttr', attr: 'alt', value: Locator._serText(text) }], this.defaultTimeout, this.expectTimeout, this._stepReporter, this);
+        return this.locator(`[alt="${Locator._cssAttrValue(text)}"]`);
     }
 
     getByTitle(text: string | RegExp): Locator {
-        const textStr = typeof text === 'string' ? text : text.source;
-        return this.locator(`[title="${textStr}"]`);
+        if (text instanceof RegExp)
+            return new Locator(this.session, [{ kind: 'getByAttr', attr: 'title', value: Locator._serText(text) }], this.defaultTimeout, this.expectTimeout, this._stepReporter, this);
+        return this.locator(`[title="${Locator._cssAttrValue(text)}"]`);
     }
 
     getByXPath(expr: string): Locator {
@@ -531,40 +570,16 @@ export class Page extends EventEmitter {
         options?: { timeout?: number }
     ): Promise<void> {
         return this._stepReporter(`page.setInputFiles(${JSON.stringify(selector)})`, async () => {
-            const arr = Array.isArray(files) ? files : [files];
-            const payloads: FilePayload[] = arr.map(f => {
-                if (typeof f === 'string') {
-                    const buf = readFileSync(f);
-                    const name = f.split('/').pop() ?? f;
-                    return { name, mimeType: 'application/octet-stream', buffer: buf };
-                }
-                return f;
-            });
-            const serialized = payloads.map(p => ({
-                name: p.name,
-                mimeType: p.mimeType,
-                base64: p.buffer.toString('base64'),
-            }));
+            const serialized = serializeFiles(files);
             const loc = this.locator(selector);
             await loc.waitFor({ timeout: options?.timeout ?? this.defaultTimeout });
             await this.session.sendCommand({
                 type: 'evaluate',
                 expression: `(function() {
-                    var payloads = ${JSON.stringify(serialized)};
                     var els = resolveSteps(${JSON.stringify(loc['_steps'])});
                     var el = els[0];
                     if (!el) throw new Error('Element not found for setInputFiles');
-                    var dt = new DataTransfer();
-                    payloads.forEach(function(p) {
-                        var bytes = atob(p.base64);
-                        var arr = new Uint8Array(bytes.length);
-                        for (var i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
-                        var file = new File([arr], p.name, { type: p.mimeType });
-                        dt.items.add(file);
-                    });
-                    Object.defineProperty(el, 'files', { value: dt.files, configurable: true });
-                    el.dispatchEvent(new Event('input', { bubbles: true }));
-                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                    ${fileTransferScript(serialized)}
                 })()`,
             });
         });
@@ -661,7 +676,7 @@ export class Page extends EventEmitter {
 
     async waitForNavigation(options?: { timeout?: number; waitUntil?: WaitUntilState }): Promise<void> {
         const timeout = options?.timeout ?? this.navigationTimeout;
-        (this.session as unknown as { isReady: boolean }).isReady = false;
+        this.session.resetReady();
         await this.session.waitForReady(timeout);
         await this.waitForLoadState(options?.waitUntil ?? 'load');
     }
@@ -763,8 +778,12 @@ export class Page extends EventEmitter {
         return this.session.sendCommand<T>({ type: 'evaluate', expression });
     }
 
-    async evaluateHandle(fn: ((...args: unknown[]) => unknown) | string, ...args: unknown[]): Promise<unknown> {
-        return this.evaluate(fn as (...args: unknown[]) => unknown, ...args);
+    async evaluateHandle(fn: ((...args: unknown[]) => unknown) | string, ...args: unknown[]): Promise<JSHandle> {
+        const handleId = randomUUID();
+        const fnStr = typeof fn === 'function' ? fn.toString() : `(${String(fn)})`;
+        const expression = `(${fnStr})(${args.length > 0 ? JSON.stringify(args.length === 1 ? args[0] : args) : ''})`;
+        await this.session.sendCommand({ type: 'storeHandle', handleId, expression, args: args[0] ?? null });
+        return new JSHandle(this.session, handleId);
     }
 
     async dispatchEvent(selector: string, type: string, eventInit?: Record<string, unknown>, options?: { timeout?: number }): Promise<void> {
@@ -843,8 +862,8 @@ export class Page extends EventEmitter {
         await this.evaluate(script).catch(() => {});
     }
 
-    workers(): never {
-        throw new Error('workers() is not supported by playwright-hammerhead');
+    workers(): [] {
+        return [];
     }
 
     async pause(): Promise<never> {
@@ -1025,41 +1044,10 @@ export class Page extends EventEmitter {
     // --- Screenshot via modern-screenshot ---
 
     async screenshot(options?: ScreenshotOptions): Promise<Buffer> {
-        const libCode = getModernScreenshotCode();
-        const isJpeg = options?.type === 'jpeg';
-        const quality = options?.quality ?? (isJpeg ? 0.92 : 1);
-        const msType = isJpeg ? 'image/jpeg' : 'image/png';
-        const fullPage = options?.fullPage ?? false;
-
-        const expression = `
-            new Promise(function(resolve, reject) {
-                try {
-                    if (!window.__modernScreenshotLoaded) {
-                        var s = document.createElement('script');
-                        s.textContent = ${JSON.stringify(libCode)};
-                        document.head.appendChild(s);
-                        window.__modernScreenshotLoaded = true;
-                    }
-                    var target = document.documentElement;
-                    var opts = { type: ${JSON.stringify(msType)}, quality: ${quality} };
-                    if (${fullPage}) {
-                        opts.width = document.documentElement.scrollWidth;
-                        opts.height = document.documentElement.scrollHeight;
-                    }
-                    var fn = ${isJpeg} ? window.modernScreenshot.domToJpeg : window.modernScreenshot.domToPng;
-                    fn(target, opts).then(resolve).catch(reject);
-                } catch(e) { reject(e instanceof Error ? e.message : String(e)); }
-            })
-        `;
-
+        const expression = buildScreenshotExpression('document.documentElement', options);
         const dataUrl = await this.session.sendCommand<string>({ type: 'evaluate', expression });
-        if (!dataUrl || typeof dataUrl !== 'string') return Buffer.alloc(0);
-
-        const base64 = dataUrl.split(',')[1] ?? '';
-        const buffer = Buffer.from(base64, 'base64');
-
+        const buffer = decodeScreenshotDataUrl(dataUrl);
         if (options?.path) writeFileSync(options.path, buffer);
-
         return buffer;
     }
 
