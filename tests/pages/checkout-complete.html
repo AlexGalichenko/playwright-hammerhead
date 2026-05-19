@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Shop - Order Complete</title>
+  <style>
+    body { font-family: sans-serif; padding: 40px; text-align: center; }
+    .complete-header { font-size: 1.8em; color: #132322; margin-bottom: 20px; }
+    .complete-text { color: #5c5c5c; margin-bottom: 30px; }
+    button { padding: 10px 30px; cursor: pointer; border: 2px solid #3ddc91; background: #3ddc91; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <div class="complete-header">Thank you for your order!</div>
+  <p class="complete-text">Your order has been dispatched and will arrive in 5-8 business days.</p>
+  <button data-test="back-to-products" onclick="window.location.href='http://localhost:8000/inventory.html'">
+    Back Home
+  </button>
+</body>
+</html>

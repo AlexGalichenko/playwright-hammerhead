@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Shop - Checkout Overview</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; }
+    h1 { color: #132322; }
+    .summary_info { border: 1px solid #ddd; padding: 20px; margin-bottom: 20px; }
+    .summary_info h2 { margin-top: 0; }
+    .summary_item { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #eee; }
+    .summary_total { font-weight: bold; font-size: 1.1em; margin-top: 10px; }
+    .cart-buttons { display: flex; gap: 10px; }
+    button { padding: 10px 20px; cursor: pointer; border: 2px solid #3ddc91; background: white; font-weight: bold; }
+    [data-test="finish"] { background: #3ddc91; border-color: #3ddc91; }
+  </style>
+</head>
+<body>
+  <h1>Checkout: Overview</h1>
+  <div class="summary_info">
+    <h2>Order Summary</h2>
+    <div id="summary-items"></div>
+    <div class="summary_total" id="summary-total"></div>
+  </div>
+  <div class="cart-buttons">
+    <button data-test="cancel" onclick="history.back()">Cancel</button>
+    <button data-test="finish" id="finish-btn">Finish</button>
+  </div>
+
+  <script>
+    var PRODUCTS = [
+      { id: 4, slug: 'sauce-labs-backpack',               name: 'Sauce Labs Backpack',                  price: 29.99 },
+      { id: 0, slug: 'sauce-labs-bike-light',             name: 'Sauce Labs Bike Light',                price:  9.99 },
+      { id: 1, slug: 'sauce-labs-bolt-t-shirt',           name: 'Sauce Labs Bolt T-Shirt',              price: 15.99 },
+      { id: 5, slug: 'sauce-labs-fleece-jacket',          name: 'Sauce Labs Fleece Jacket',             price: 49.99 },
+      { id: 2, slug: 'sauce-labs-onesie',                 name: 'Sauce Labs Onesie',                    price:  7.99 },
+      { id: 3, slug: 'test.allthethings()-t-shirt-(red)', name: 'Test.allTheThings() T-Shirt (Red)',    price: 15.99 },
+    ];
+
+    var cart = JSON.parse(localStorage.getItem('cart') || '[]');
+    var itemsHtml = '';
+    var total = 0;
+
+    cart.forEach(function(slug) {
+      var p = PRODUCTS.find(function(x) { return x.slug === slug; });
+      if (!p) return;
+      total += p.price;
+      itemsHtml += '<div class="summary_item"><span>' + p.name + '</span><span>$' + p.price.toFixed(2) + '</span></div>';
+    });
+
+    document.getElementById('summary-items').innerHTML = itemsHtml || '<p>No items</p>';
+    document.getElementById('summary-total').textContent = 'Total: $' + total.toFixed(2);
+
+    document.getElementById('finish-btn').addEventListener('click', function() {
+      localStorage.setItem('cart', '[]');
+      window.location.href = 'http://localhost:8000/checkout-complete.html';
+    });
+  </script>
+</body>
+</html>

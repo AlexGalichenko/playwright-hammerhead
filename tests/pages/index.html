@@ -5,13 +5,20 @@
   <title>Local Test Page</title>
 </head>
 <body>
-  <h1 id="heading">Hello from local server</h1>
-  <p id="description">This page is served by the LocalServer.</p>
-  
+  <h1 id="heading">Local Test Page</h1>
+  <p id="description">Welcome to the local test server.</p>
+  <input id="user-name" type="text" placeholder="Username">
+  <input id="password" type="password" placeholder="Password">
+  <button id="login-button">Login</button>
+
   <script>
-    setTimeout(() => {
-       window.open('http://localhost:8000/secondPage.html', '_blank');
-    }, 3000);
+    document.getElementById('login-button').addEventListener('click', function() {
+      var user = document.getElementById('user-name').value;
+      var pass = document.getElementById('password').value;
+      if (user === 'standard_user' && pass === 'secret_sauce') {
+        window.location.href = 'http://localhost:8000/inventory.html';
+      }
+    });
   </script>
 </body>
 </html>

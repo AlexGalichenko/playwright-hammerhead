@@ -15,6 +15,7 @@ type ServiceMsg = { sessionId?: string; cmd?: string; id?: string; result?: unkn
 export class BridgeSession extends Session {
     private commandQueue: BridgeCommand[] = [];
     private pendingCommands = new Map<string, Deferred<unknown>>();
+    private dispatchedCommands = new Map<string, BridgeCommand>();
     private pendingPoll: Deferred<BridgeCommand | null> | null = null;
     private readyDeferred: Deferred<void> | null = null;
     private isReady = false;
@@ -24,6 +25,7 @@ export class BridgeSession extends Session {
     private _exposedBindings = new Map<string, (source: Record<string, unknown>, ...args: unknown[]) => unknown>();
     private _blankServer: Server | null = null;
     private _blankPort = 0;
+    private _suppressRedispatch = false;
 
     readonly proxyPort: number;
 
@@ -1156,10 +1158,37 @@ export class BridgeSession extends Session {
 
     resetReady(): void {
         this.isReady = false;
+        // Suppress re-dispatch on the next bridge_ready: this is an intentional navigation
+        // (goto/reload/goBack/goForward), so any currently dispatched commands belong to the
+        // old page and should be discarded rather than replayed on the new one.
+        this._suppressRedispatch = true;
     }
 
     async bridge_ready(_msg: ServiceMsg): Promise<null> {
         this.isReady = true;
+        if (this._suppressRedispatch) {
+            // Intentional navigation — discard stale in-flight commands instead of replaying them.
+            // Replaying a navigate command (location.href = ...) on the freshly-loaded page would
+            // trigger an infinite reload loop.
+            this._suppressRedispatch = false;
+            this.dispatchedCommands.clear();
+        } else {
+            // Re-deliver commands that were dispatched to the previous bridge but never answered
+            // (happens when a JS-triggered navigation causes the old bridge to drop in-flight commands).
+            const dropped = [...this.dispatchedCommands.values()];
+            this.dispatchedCommands.clear();
+            for (const cmd of dropped) {
+                if (this.pendingPoll) {
+                    // New bridge is already waiting — deliver directly so it doesn't wait 30s for the poll timeout.
+                    const poll = this.pendingPoll;
+                    this.pendingPoll = null;
+                    this.dispatchedCommands.set(cmd.id, cmd);
+                    poll.resolve(cmd);
+                } else {
+                    this.commandQueue.unshift(cmd);
+                }
+            }
+        }
         if (this.readyDeferred) {
             this.readyDeferred.resolve();
             this.readyDeferred = null;
@@ -1169,7 +1198,9 @@ export class BridgeSession extends Session {
 
     async bridge_getCommand(_msg: ServiceMsg): Promise<BridgeCommand | null> {
         if (this.commandQueue.length > 0) {
-            return this.commandQueue.shift()!;
+            const cmd = this.commandQueue.shift()!;
+            this.dispatchedCommands.set(cmd.id, cmd);
+            return cmd;
         }
         this.pendingPoll = new Deferred<BridgeCommand | null>();
         const pollDeferred = this.pendingPoll;
@@ -1186,6 +1217,7 @@ export class BridgeSession extends Session {
 
     async bridge_commandResult(msg: ServiceMsg): Promise<null> {
         if (!msg.id) return null;
+        this.dispatchedCommands.delete(msg.id);
         const deferred = this.pendingCommands.get(msg.id);
         if (deferred) {
             this.pendingCommands.delete(msg.id);
@@ -1204,6 +1236,7 @@ export class BridgeSession extends Session {
         if (this.pendingPoll) {
             const poll = this.pendingPoll;
             this.pendingPoll = null;
+            this.dispatchedCommands.set(id, fullCommand);
             poll.resolve(fullCommand);
         } else {
             this.commandQueue.push(fullCommand);

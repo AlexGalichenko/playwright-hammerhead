@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Popup Test Page</title>
+</head>
+<body>
+  <h1>Popup Test Page</h1>
+  <p>Opens a second page after 3 seconds.</p>
+
+  <script>
+    setTimeout(function() {
+      window.open('http://localhost:8000/secondPage.html', '_blank');
+    }, 3000);
+  </script>
+</body>
+</html>

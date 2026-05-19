@@ -17,20 +17,6 @@ async function withMatcherStep(
     }
 }
 
-async function waitForCondition(
-    fn: () => Promise<boolean>,
-    expected: boolean,
-    timeout: number
-): Promise<boolean> {
-    const deadline = Date.now() + timeout;
-    while (Date.now() < deadline) {
-        const result = await fn();
-        if (result === expected) return result;
-        await new Promise(r => setTimeout(r, 100));
-    }
-    return fn();
-}
-
 type MatcherContext = { isNot: boolean };
 type MatcherResult = Promise<{ pass: boolean; message: () => string }>;
 
@@ -49,7 +35,12 @@ async function runLocator(
         locator._stepReporter,
         `expect(${locator._description()}).${not ? 'not.' : ''}${label}`,
         async () => {
-            pass = await waitForCondition(condition, !not, timeout);
+            try {
+                await expect.poll(condition, { timeout }).toBe(!not);
+                pass = !not;
+            } catch {
+                pass = not;
+            }
             if (pass !== !not) throw new Error(m());
         }
     );
@@ -71,7 +62,12 @@ async function runPage(
         page._stepReporter,
         `expect(page).${not ? 'not.' : ''}${label}`,
         async () => {
-            pass = await waitForCondition(condition, !not, timeout);
+            try {
+                await expect.poll(condition, { timeout }).toBe(!not);
+                pass = !not;
+            } catch {
+                pass = not;
+            }
             if (pass !== !not) throw new Error(m());
         }
     );

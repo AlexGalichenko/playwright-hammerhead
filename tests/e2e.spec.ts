@@ -1,10 +1,10 @@
 import { test, expect } from './fixtures';
 
-const BASE_URL = 'https://www.saucedemo.com';
+const LOGIN_URL = 'http://localhost:8000/login.html';
 
-test.describe('Saucedemo checkout flow', () => {
+test.describe('Shop', () => {
     test.beforeEach(async ({ safariPage: page }) => {
-        await page.goto(BASE_URL);
+        await page.goto(LOGIN_URL);
         await page.fill('#user-name', 'standard_user');
         await page.fill('#password', 'secret_sauce');
         await page.click('#login-button');
@@ -16,7 +16,7 @@ test.describe('Saucedemo checkout flow', () => {
         await expect(page.locator('.shopping_cart_badge')).toHaveText('1');
     });
 
-    test('cart shows added item', async ({ safariPage:page }) => {
+    test('cart shows added item', async ({ safariPage: page }) => {
         await page.click('[data-test="add-to-cart-sauce-labs-backpack"]');
         await page.click('.shopping_cart_link');
         await expect(page.locator('.cart_item')).toBeVisible();
@@ -46,5 +46,24 @@ test.describe('Saucedemo checkout flow', () => {
         await page.click('[data-test="continue"]');
 
         await expect(page.locator('[data-test="error"]')).toBeVisible();
+    });
+});
+
+test.describe('Catalog', () => {
+    test('multi-step catalog checkout', async ({ safariPage: page }) => {
+        await page.goto('http://localhost:8000/catalog.html');
+        await page.locator('[role="listitem"][id*=category]').filter({ hasText: 'Keyboards' }).click();
+        await page.locator('[role="listitem"][id*=category]').filter({ hasText: 'Internet Keyboard' }).click();
+        await page.locator('[aria-label="Product Footer"] button').click();
+        await page.locator('[aria-label="Show Shopping Cart"]').click();
+        await page.locator('[data-sap-ui="container-cart---cartView--proceedButton"]').click();
+        await page.locator('[data-sap-ui="container-cart---checkoutView--contentsStep-nextButton"]').click();
+        await page.locator('[data-sap-ui="container-cart---checkoutView--paymentTypeStep-nextButton"]').click();
+        await page.locator('#container-cart---checkoutView--creditCardHolderName-inner').fill('John Doe');
+        await page.locator('#container-cart---checkoutView--creditCardNumber-inner').fill('4111 1111 1111 1111');
+        await page.locator('#container-cart---checkoutView--creditCardExpirationDate-inner').fill('12/34');
+        await page.locator('#container-cart---checkoutView--creditCardSecurityNumber-inner').fill('123');
+        await page.locator('[data-sap-ui="container-cart---checkoutView--creditCardStep-nextButton"]').click();
+        await expect(page.locator('#view-order-complete')).toBeVisible();
     });
 });

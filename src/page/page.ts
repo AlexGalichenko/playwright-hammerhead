@@ -337,7 +337,7 @@ export class Page extends EventEmitter {
             this._navIndex = this._navHistory.length - 1;
             const readyPromise = this.session.waitForReady(timeout);
             let cmdError: Error | undefined;
-            await this.session.sendCommand({ type: 'evaluate', expression: `location.href = ${JSON.stringify(proxiedUrl)}` })
+            void this.session.sendCommand({ type: 'evaluate', expression: `location.href = ${JSON.stringify(proxiedUrl)}` })
                 .catch(e => { cmdError = e as Error; });
             await readyPromise.catch(timeoutErr => { throw cmdError ?? timeoutErr; });
         });
@@ -364,7 +364,7 @@ export class Page extends EventEmitter {
             this.session.resetReady();
             const readyPromise = this.session.waitForReady(timeout);
             let cmdError: Error | undefined;
-            await this.session.sendCommand({ type: 'evaluate', expression: `location.href = ${JSON.stringify(prevUrl)}` })
+            void this.session.sendCommand({ type: 'evaluate', expression: `location.href = ${JSON.stringify(prevUrl)}` })
                 .catch(e => { cmdError = e as Error; });
             await readyPromise.catch(timeoutErr => { throw cmdError ?? timeoutErr; });
         });
@@ -379,7 +379,7 @@ export class Page extends EventEmitter {
             this.session.resetReady();
             const readyPromise = this.session.waitForReady(timeout);
             let cmdError: Error | undefined;
-            await this.session.sendCommand({ type: 'evaluate', expression: `location.href = ${JSON.stringify(nextUrl)}` })
+            void this.session.sendCommand({ type: 'evaluate', expression: `location.href = ${JSON.stringify(nextUrl)}` })
                 .catch(e => { cmdError = e as Error; });
             await readyPromise.catch(timeoutErr => { throw cmdError ?? timeoutErr; });
         });
