@@ -629,10 +629,10 @@ export class BridgeSession extends Session {
         sendMsg('bridge_ready', {}, 5000).catch(function() { setTimeout(signalReady, 500); });
     }
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', signalReady);
-    } else {
+    if (document.readyState === 'complete') {
         signalReady();
+    } else {
+        window.addEventListener('load', signalReady, { once: true });
     }
 
     window.addEventListener('pageshow', function(e) {
