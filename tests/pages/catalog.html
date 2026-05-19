@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Product Catalog</title>
+  <style>
+    body { font-family: sans-serif; margin: 0; }
+    #app { display: flex; height: 100vh; }
+    #panel { width: 300px; border-right: 1px solid #ddd; overflow-y: auto; }
+    #content { flex: 1; padding: 20px; overflow-y: auto; }
+    ul { list-style: none; margin: 0; padding: 0; }
+    li[role="listitem"] { padding: 12px 16px; border-bottom: 1px solid #eee; cursor: pointer; }
+    li[role="listitem"]:hover { background: #f5f5f5; }
+    .product-footer { display: flex; justify-content: flex-end; margin-top: 20px; padding: 10px; border-top: 1px solid #ddd; }
+    button { padding: 8px 16px; cursor: pointer; background: #0070f2; color: white; border: none; border-radius: 4px; }
+    button:hover { background: #005fcc; }
+    #cart-icon { position: fixed; top: 10px; right: 10px; }
+    .step { max-width: 500px; }
+    .step h2 { margin-bottom: 20px; }
+    .form-field { margin-bottom: 16px; }
+    .form-field label { display: block; margin-bottom: 4px; font-weight: bold; }
+    .form-field input { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+    .step-actions { margin-top: 20px; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <!-- Category / product panel -->
+  <div id="panel">
+    <!-- State 0: Top-level categories -->
+    <div id="view-categories">
+      <ul>
+        <li role="listitem" id="category-audio">Audio</li>
+        <li role="listitem" id="category-keyboards">Keyboards</li>
+        <li role="listitem" id="category-monitors">Monitors</li>
+        <li role="listitem" id="category-accessories">Accessories</li>
+      </ul>
+    </div>
+
+    <!-- State 1: Keyboard sub-items (hidden) -->
+    <div id="view-keyboard-items" class="hidden">
+      <ul>
+        <li role="listitem" id="category-gaming-keyboard">Gaming Keyboard</li>
+        <li role="listitem" id="category-internet-keyboard">Internet Keyboard</li>
+        <li role="listitem" id="category-mechanical-keyboard">Mechanical Keyboard</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Main content area -->
+  <div id="content">
+    <!-- Cart icon (hidden until item added) -->
+    <button aria-label="Show Shopping Cart" id="cart-icon" class="hidden">Cart (1)</button>
+
+    <!-- State 0: Welcome -->
+    <div id="view-welcome">
+      <h2>Welcome to the Product Catalog</h2>
+      <p>Select a category from the left to browse products.</p>
+    </div>
+
+    <!-- State 2: Product detail (hidden) -->
+    <div id="view-product" class="hidden">
+      <h2>Internet Keyboard</h2>
+      <p>Model: IK-2000 Pro</p>
+      <p>Price: $49.99</p>
+      <div aria-label="Product Footer" class="product-footer">
+        <button id="add-to-cart-btn">Add to Cart</button>
+      </div>
+    </div>
+
+    <!-- State 3: Cart view (hidden) -->
+    <div id="view-cart" class="hidden">
+      <div class="step">
+        <h2>Shopping Cart</h2>
+        <p>Internet Keyboard &mdash; Qty: 1 &mdash; $49.99</p>
+        <div class="step-actions">
+          <button data-sap-ui="container-cart---cartView--proceedButton">Proceed to Checkout</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- State 4: Checkout contents step (hidden) -->
+    <div id="view-checkout-contents" class="hidden">
+      <div class="step">
+        <h2>Step 1: Review Cart Contents</h2>
+        <p>Internet Keyboard &mdash; Qty: 1 &mdash; $49.99</p>
+        <div class="step-actions">
+          <button data-sap-ui="container-cart---checkoutView--contentsStep-nextButton">Next</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- State 5: Payment type step (hidden) -->
+    <div id="view-checkout-payment-type" class="hidden">
+      <div class="step">
+        <h2>Step 2: Select Payment Type</h2>
+        <label><input type="radio" name="payment" value="credit" checked> Credit Card</label><br>
+        <label><input type="radio" name="payment" value="paypal"> PayPal</label>
+        <div class="step-actions">
+          <button data-sap-ui="container-cart---checkoutView--paymentTypeStep-nextButton">Next</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- State 6: Credit card step (hidden) -->
+    <div id="view-checkout-credit-card" class="hidden">
+      <div class="step">
+        <h2>Step 3: Credit Card Details</h2>
+        <div class="form-field">
+          <label>Name on Card</label>
+          <input type="text" id="container-cart---checkoutView--creditCardHolderName-inner" placeholder="Full Name">
+        </div>
+        <div class="form-field">
+          <label>Card Number</label>
+          <input type="text" id="container-cart---checkoutView--creditCardNumber-inner" placeholder="0000 0000 0000 0000">
+        </div>
+        <div class="form-field">
+          <label>Expiration Date</label>
+          <input type="text" id="container-cart---checkoutView--creditCardExpirationDate-inner" placeholder="MM/YY">
+        </div>
+        <div class="form-field">
+          <label>Security Code</label>
+          <input type="text" id="container-cart---checkoutView--creditCardSecurityNumber-inner" placeholder="CVV">
+        </div>
+        <div class="step-actions">
+          <button data-sap-ui="container-cart---checkoutView--creditCardStep-nextButton">Place Order</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- State 7: Order complete (hidden) -->
+    <div id="view-order-complete" class="hidden">
+      <div class="step">
+        <h2>Order Confirmed!</h2>
+        <p>Your order has been placed successfully. Thank you!</p>
+        <button onclick="window.location.reload()">Continue Shopping</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  function show(id) {
+    var views = document.querySelectorAll('#content > div, #panel > div');
+    views.forEach(function(v) { v.classList.add('hidden'); });
+    document.getElementById(id).classList.remove('hidden');
+  }
+
+  function showPanel(id) {
+    var panels = document.querySelectorAll('#panel > div');
+    panels.forEach(function(v) { v.classList.add('hidden'); });
+    document.getElementById(id).classList.remove('hidden');
+  }
+
+  // Category: Keyboards
+  document.getElementById('category-keyboards').addEventListener('click', function() {
+    showPanel('view-keyboard-items');
+    show('view-welcome');
+  });
+
+  // Keyboard item: Internet Keyboard
+  document.getElementById('category-internet-keyboard').addEventListener('click', function() {
+    show('view-product');
+  });
+
+  // Add to cart
+  document.getElementById('add-to-cart-btn').addEventListener('click', function() {
+    document.getElementById('cart-icon').classList.remove('hidden');
+    show('view-welcome');
+  });
+
+  // Show cart
+  document.getElementById('cart-icon').addEventListener('click', function() {
+    show('view-cart');
+  });
+
+  // Proceed to checkout
+  document.querySelector('[data-sap-ui="container-cart---cartView--proceedButton"]').addEventListener('click', function() {
+    show('view-checkout-contents');
+  });
+
+  // Contents next
+  document.querySelector('[data-sap-ui="container-cart---checkoutView--contentsStep-nextButton"]').addEventListener('click', function() {
+    show('view-checkout-payment-type');
+  });
+
+  // Payment type next
+  document.querySelector('[data-sap-ui="container-cart---checkoutView--paymentTypeStep-nextButton"]').addEventListener('click', function() {
+    show('view-checkout-credit-card');
+  });
+
+  // Credit card next
+  document.querySelector('[data-sap-ui="container-cart---checkoutView--creditCardStep-nextButton"]').addEventListener('click', function() {
+    show('view-order-complete');
+  });
+</script>
+</body>
+</html>

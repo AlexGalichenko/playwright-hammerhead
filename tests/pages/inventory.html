@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Shop - Inventory</title>
+  <style>
+    body { font-family: sans-serif; margin: 0; }
+    #header { display: flex; align-items: center; padding: 10px 20px; background: #e02b27; color: white; }
+    #header h1 { flex: 1; margin: 0; font-size: 1.2em; }
+    #react-burger-menu-btn { background: none; border: none; color: white; font-size: 1.5em; cursor: pointer; margin-right: 10px; }
+    .shopping_cart_link { color: white; text-decoration: none; position: relative; }
+    .shopping_cart_badge { background: white; color: #e02b27; border-radius: 50%; padding: 2px 6px; font-size: 0.8em; font-weight: bold; position: absolute; top: -8px; right: -10px; }
+    #sidebar { position: fixed; top: 0; left: 0; width: 250px; height: 100%; background: white; box-shadow: 2px 0 5px rgba(0,0,0,0.3); padding: 20px; z-index: 100; }
+    #sidebar a { display: block; padding: 10px 0; text-decoration: none; color: #333; border-bottom: 1px solid #eee; }
+    #sort-bar { padding: 10px 20px; display: flex; align-items: center; gap: 10px; }
+    .product_sort_container { padding: 6px; }
+    .inventory_list { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; padding: 20px; }
+    .inventory_item { border: 1px solid #ddd; padding: 15px; border-radius: 4px; }
+    .inventory_item_name { font-weight: bold; cursor: pointer; color: #132322; margin-bottom: 8px; }
+    .inventory_item_name:hover { color: #e02b27; }
+    .inventory_item_price { color: #1d252c; font-size: 1.1em; margin-bottom: 10px; }
+    .inventory_item button { width: 100%; padding: 8px; border: 2px solid #3ddc91; background: white; color: #132322; cursor: pointer; font-weight: bold; }
+    .inventory_item button.remove-btn { border-color: #e2231a; }
+  </style>
+</head>
+<body>
+  <div id="header">
+    <button id="react-burger-menu-btn">&#9776;</button>
+    <h1>Products</h1>
+    <a href="http://localhost:8000/cart.html" class="shopping_cart_link">
+      &#128722;<span class="shopping_cart_badge" id="cart-badge"></span>
+    </a>
+  </div>
+
+  <nav id="sidebar" style="display:none">
+    <a id="logout_sidebar_link" href="http://localhost:8000/login.html">Logout</a>
+  </nav>
+
+  <div id="sort-bar">
+    <label for="sort">Sort by:</label>
+    <select class="product_sort_container" id="sort">
+      <option value="az">Name (A to Z)</option>
+      <option value="za">Name (Z to A)</option>
+      <option value="lohi">Price (Low to High)</option>
+      <option value="hilo">Price (High to Low)</option>
+    </select>
+  </div>
+
+  <div class="inventory_list" id="inventory-list"></div>
+
+  <script>
+    var PRODUCTS = [
+      { id: 4, slug: 'sauce-labs-backpack',            name: 'Sauce Labs Backpack',                  price: 29.99 },
+      { id: 0, slug: 'sauce-labs-bike-light',          name: 'Sauce Labs Bike Light',                price:  9.99 },
+      { id: 1, slug: 'sauce-labs-bolt-t-shirt',        name: 'Sauce Labs Bolt T-Shirt',              price: 15.99 },
+      { id: 5, slug: 'sauce-labs-fleece-jacket',       name: 'Sauce Labs Fleece Jacket',             price: 49.99 },
+      { id: 2, slug: 'sauce-labs-onesie',              name: 'Sauce Labs Onesie',                    price:  7.99 },
+      { id: 3, slug: 'test.allthethings()-t-shirt-(red)', name: 'Test.allTheThings() T-Shirt (Red)', price: 15.99 },
+    ];
+
+    var cart = JSON.parse(localStorage.getItem('cart') || '[]');
+
+    function updateBadge() {
+      var badge = document.getElementById('cart-badge');
+      badge.textContent = cart.length > 0 ? String(cart.length) : '';
+    }
+
+    function renderInventory() {
+      var sortVal = document.getElementById('sort').value;
+      var sorted = PRODUCTS.slice();
+      if (sortVal === 'za')   sorted.sort(function(a, b) { return b.name.localeCompare(a.name); });
+      else if (sortVal === 'lohi') sorted.sort(function(a, b) { return a.price - b.price; });
+      else if (sortVal === 'hilo') sorted.sort(function(a, b) { return b.price - a.price; });
+      else sorted.sort(function(a, b) { return a.name.localeCompare(b.name); });
+
+      var list = document.getElementById('inventory-list');
+      list.innerHTML = sorted.map(function(p) {
+        var inCart = cart.indexOf(p.slug) !== -1;
+        var btn = inCart
+          ? '<button class="remove-btn" data-test="remove-' + p.slug + '" data-slug="' + p.slug + '">Remove</button>'
+          : '<button data-test="add-to-cart-' + p.slug + '" data-slug="' + p.slug + '">Add to cart</button>';
+        return '<div class="inventory_item" id="item-' + p.id + '">' +
+          '<div class="inventory_item_name" data-id="' + p.id + '">' + p.name + '</div>' +
+          '<div class="inventory_item_price">$' + p.price.toFixed(2) + '</div>' +
+          btn +
+          '</div>';
+      }).join('');
+
+      list.querySelectorAll('[data-test^="add-to-cart"]').forEach(function(btn) {
+        btn.addEventListener('click', function() { addToCart(btn.dataset.slug); });
+      });
+      list.querySelectorAll('[data-test^="remove"]').forEach(function(btn) {
+        btn.addEventListener('click', function() { removeFromCart(btn.dataset.slug); });
+      });
+      list.querySelectorAll('.inventory_item_name').forEach(function(el) {
+        el.addEventListener('click', function() {
+          window.location.href = 'http://localhost:8000/product-detail.html?id=' + el.dataset.id;
+        });
+      });
+    }
+
+    function addToCart(slug) {
+      if (cart.indexOf(slug) === -1) {
+        cart.push(slug);
+        localStorage.setItem('cart', JSON.stringify(cart));
+        updateBadge();
+        renderInventory();
+      }
+    }
+
+    function removeFromCart(slug) {
+      cart = cart.filter(function(s) { return s !== slug; });
+      localStorage.setItem('cart', JSON.stringify(cart));
+      updateBadge();
+      renderInventory();
+    }
+
+    document.getElementById('sort').addEventListener('change', renderInventory);
+
+    document.getElementById('react-burger-menu-btn').addEventListener('click', function() {
+      var sidebar = document.getElementById('sidebar');
+      sidebar.style.display = sidebar.style.display === 'none' ? 'block' : 'none';
+    });
+
+    updateBadge();
+    renderInventory();
+  </script>
+</body>
+</html>

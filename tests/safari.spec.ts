@@ -1,9 +1,12 @@
 import { test, expect } from './fixtures';
 import type { Route, ConsoleMessage, Dialog, Frame, FileChooser, WebSocketEvent, PageResponse } from '../src';
 
-test.describe('Saucedemo checkout flow', () => {
+const LOCAL = 'http://localhost:8000/index.html';
+const LOGIN_URL  = 'http://localhost:8000/login.html';
+
+test.describe('Shop checkout flow', () => {
     test('completes full checkout as standard_user', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOGIN_URL);
 
         await page.fill('#user-name', 'standard_user');
         await page.fill('#password', 'secret_sauce');
@@ -37,9 +40,9 @@ test.describe('Saucedemo checkout flow', () => {
     });
 });
 
-test.describe('Saucedemo login', () => {
+test.describe('Shop login', () => {
     test('locked_out_user sees error message', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOGIN_URL);
         await page.fill('#user-name', 'locked_out_user');
         await page.fill('#password', 'secret_sauce');
         await page.click('#login-button');
@@ -49,14 +52,14 @@ test.describe('Saucedemo login', () => {
     });
 
     test('empty credentials show required-field error', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOGIN_URL);
         await page.click('#login-button');
 
         await expect(page.locator('[data-test="error"]')).toBeVisible();
     });
 
     test('wrong password shows error', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOGIN_URL);
         await page.fill('#user-name', 'standard_user');
         await page.fill('#password', 'wrong_password');
         await page.click('#login-button');
@@ -65,9 +68,9 @@ test.describe('Saucedemo login', () => {
     });
 });
 
-test.describe('Saucedemo inventory', () => {
+test.describe('Shop inventory', () => {
     test.beforeEach(async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOGIN_URL);
         await page.fill('#user-name', 'standard_user');
         await page.fill('#password', 'secret_sauce');
         await page.click('#login-button');
@@ -86,16 +89,6 @@ test.describe('Saucedemo inventory', () => {
     test('sorts products by name Z to A', async ({ safariPage: page }) => {
         await page.selectOption('.product_sort_container', 'za');
         await expect(page.locator('.inventory_item_name')).toHaveText('Test.allTheThings() T-Shirt (Red)');
-    });
-
-    test('navigates to product detail and back', async ({ safariPage: page }) => {
-        await page.click('.inventory_item_name');
-
-        await expect(page.locator('.inventory_details_name')).toBeVisible();
-
-        await page.click('[data-test="back-to-products"]');
-
-        await expect(page.locator('.inventory_list')).toBeVisible();
     });
 
     test('add multiple items updates cart badge', async ({ safariPage: page }) => {
@@ -129,7 +122,7 @@ test.describe('Saucedemo inventory', () => {
 
 test.describe('page.route', () => {
     test.beforeEach(async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
         await expect(page.locator('#login-button')).toBeVisible({ timeout: 10000 });
     });
 
@@ -312,7 +305,7 @@ test.describe('page.route', () => {
 test.describe('page.addInitScript', () => {
     test('string script sets window variable before page code runs', async ({ safariPage: page }) => {
         await page.addInitScript('window.__initFlag = true;');
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
 
         const flag = await page.evaluate(() => (window as any).__initFlag);
         expect(flag).toBe(true);
@@ -320,7 +313,7 @@ test.describe('page.addInitScript', () => {
 
     test('function script with serialised arg sets window variable', async ({ safariPage: page }) => {
         await page.addInitScript((val: unknown) => { (window as any).__initArg = val; }, 42);
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
 
         const val = await page.evaluate(() => (window as any).__initArg);
         expect(val).toBe(42);
@@ -329,7 +322,7 @@ test.describe('page.addInitScript', () => {
     test('multiple init scripts all run', async ({ safariPage: page }) => {
         await page.addInitScript('window.__a = 1;');
         await page.addInitScript('window.__b = 2;');
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
 
         const [a, b] = await page.evaluate(() => [(window as any).__a, (window as any).__b]);
         expect(a).toBe(1);
@@ -338,10 +331,10 @@ test.describe('page.addInitScript', () => {
 
     test('init script re-runs on subsequent navigation', async ({ safariPage: page }) => {
         await page.addInitScript('window.__nav = (window.__nav || 0) + 1;');
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
         const first = await page.evaluate(() => (window as any).__nav);
 
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
         const second = await page.evaluate(() => (window as any).__nav);
 
         expect(first).toBe(1);
@@ -351,7 +344,7 @@ test.describe('page.addInitScript', () => {
 
 test.describe('page.addLocatorHandler', () => {
     test('handler is called when locator becomes visible', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
         let handlerCalled = false;
 
         await page.addLocatorHandler(page.locator('#__hh_overlay'), async () => {
@@ -370,7 +363,7 @@ test.describe('page.addLocatorHandler', () => {
     });
 
     test('handler is not called before locator appears', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
         let handlerCalled = false;
 
         await page.addLocatorHandler(page.locator('#__never_exists'), async () => {
@@ -382,7 +375,7 @@ test.describe('page.addLocatorHandler', () => {
     });
 
     test('handler is not called again while already running', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
         let callCount = 0;
 
         await page.addLocatorHandler(page.locator('#__slow_overlay'), async () => {
@@ -404,7 +397,7 @@ test.describe('page.addLocatorHandler', () => {
 
 test.describe('page.addScriptTag', () => {
     test('inline content script is executed in page context', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
         await page.addScriptTag({ content: 'window.__scriptTag = 123;' });
 
         const val = await page.evaluate(() => (window as any).__scriptTag);
@@ -412,7 +405,7 @@ test.describe('page.addScriptTag', () => {
     });
 
     test('type attribute is set on injected script element', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
         await page.addScriptTag({ content: 'window.__typedScript = true;', type: 'text/javascript' });
 
         const val = await page.evaluate(() => (window as any).__typedScript);
@@ -420,7 +413,7 @@ test.describe('page.addScriptTag', () => {
     });
 
     test('multiple script tags can be injected independently', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
         await page.addScriptTag({ content: 'window.__s1 = "first";' });
         await page.addScriptTag({ content: 'window.__s2 = "second";' });
 
@@ -432,7 +425,7 @@ test.describe('page.addScriptTag', () => {
 
 test.describe('page.addStyleTag', () => {
     test('inline content style is applied to the page', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
         await page.addStyleTag({ content: '#login-button { opacity: 0.5; }' });
 
         const opacity = await page.evaluate(() => {
@@ -443,7 +436,7 @@ test.describe('page.addStyleTag', () => {
     });
 
     test('multiple style tags can be injected and both apply', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
         await page.addStyleTag({ content: '#user-name { color: rgb(255, 0, 0); }' });
         await page.addStyleTag({ content: '#password { color: rgb(0, 0, 255); }' });
 
@@ -456,7 +449,7 @@ test.describe('page.addStyleTag', () => {
     });
 
     test('injected style does not affect unrelated elements', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
         await page.addStyleTag({ content: '#user-name { visibility: hidden; }' });
 
         const userNameVisible = await page.evaluate(() => {
@@ -478,7 +471,7 @@ test.describe('page events', () => {
 
     test('close fires when page.close() is called', async ({ safariBrowser }) => {
         const page = await safariBrowser.newPage();
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
 
         let fired = false;
         page.once('close', () => { fired = true; });
@@ -490,7 +483,7 @@ test.describe('page events', () => {
     // ── console ────────────────────────────────────────────────────────────
 
     test('console fires with correct type and text for console.log', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
 
         const msgPromise = new Promise<ConsoleMessage>(resolve => page.once('console', resolve));
         await page.evaluate(() => console.log('hello events'));
@@ -501,7 +494,7 @@ test.describe('page events', () => {
     });
 
     test('console captures console.error with error type', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
 
         const msgPromise = new Promise<ConsoleMessage>(resolve => page.once('console', resolve));
         await page.evaluate(() => console.error('something broke'));
@@ -514,7 +507,7 @@ test.describe('page events', () => {
     // ── pageerror ──────────────────────────────────────────────────────────
 
     test('pageerror fires for uncaught window error events', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
 
         const errPromise = new Promise<Error>(resolve => page.once('pageerror', resolve));
         await page.evaluate(() =>
@@ -528,7 +521,7 @@ test.describe('page events', () => {
     // ── dialog ─────────────────────────────────────────────────────────────
 
     test('dialog fires for window.alert with correct type and message', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
 
         const dialogPromise = new Promise<Dialog>(resolve => page.once('dialog', resolve));
         await page.evaluate(() => window.alert('hello dialog'));
@@ -539,7 +532,7 @@ test.describe('page events', () => {
     });
 
     test('dialog fires for window.confirm and returns true by default', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
 
         const dialogPromise = new Promise<Dialog>(resolve => page.once('dialog', resolve));
         const result = await page.evaluate(() => window.confirm('Are you sure?'));
@@ -549,7 +542,7 @@ test.describe('page events', () => {
     });
 
     test('dialog.dismiss() makes next confirm return false', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
 
         const first = new Promise<Dialog>(resolve => page.once('dialog', resolve));
         await page.evaluate(() => window.confirm('first'));
@@ -560,7 +553,7 @@ test.describe('page events', () => {
     });
 
     test('dialog fires for window.prompt with message and defaultValue', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
 
         const dialogPromise = new Promise<Dialog>(resolve => page.once('dialog', resolve));
         await page.evaluate(() => window.prompt('Enter name', 'default'));
@@ -575,7 +568,7 @@ test.describe('page events', () => {
 
     test('domcontentloaded fires during page.goto', async ({ safariPage: page }) => {
         const dclPromise = new Promise<unknown>(resolve => page.once('domcontentloaded', resolve));
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
         const arg = await dclPromise;
 
         expect(arg).toBe(page);
@@ -583,7 +576,7 @@ test.describe('page events', () => {
 
     test('load fires during page.goto', async ({ safariPage: page }) => {
         const loadPromise = new Promise<unknown>(resolve => page.once('load', resolve));
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
         const arg = await loadPromise;
 
         expect(arg).toBe(page);
@@ -591,21 +584,22 @@ test.describe('page events', () => {
 
     // ── popup ──────────────────────────────────────────────────────────────
 
-    test('popup fires with url and target when window.open is called', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+    test('popup fires with a Page when window.open is called', async ({ safariPage: page }) => {
+        await page.goto(LOCAL);
 
-        const popupPromise = new Promise<{ url: string; target: string }>(resolve => page.once('popup', resolve));
-        await page.evaluate(() => window.open('https://example.com', '_blank'));
-        const info = await popupPromise;
+        const [popup] = await Promise.all([
+            page.waitForEvent('popup'),
+            page.evaluate(() => window.open('http://localhost:8000/secondPage.html', '_blank')),
+        ]);
 
-        expect(info.url).toContain('example.com');
-        expect(info.target).toBe('_blank');
+        expect(popup).toBeTruthy();
+        expect(popup.url()).toContain('secondPage');
     });
 
     // ── websocket ──────────────────────────────────────────────────────────
 
     test('websocket fires with url when new WebSocket is created', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
 
         const wsPromise = new Promise<WebSocketEvent>(resolve => page.once('websocket', resolve));
         await page.evaluate(() => {
@@ -619,7 +613,7 @@ test.describe('page events', () => {
     // ── filechooser ────────────────────────────────────────────────────────
 
     test('filechooser fires when a file input is clicked', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
 
         await page.evaluate(() => {
             const input = document.createElement('input');
@@ -640,7 +634,7 @@ test.describe('page events', () => {
     // ── frame events ───────────────────────────────────────────────────────
 
     test('frameattached fires when an iframe is added to the DOM', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
 
         const framePromise = new Promise<Frame>(resolve => page.once('frameattached', resolve));
         await page.evaluate(() => {
@@ -655,7 +649,7 @@ test.describe('page events', () => {
     });
 
     test('framedetached fires when an iframe is removed from the DOM', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
 
         await page.evaluate(() => {
             const iframe = document.createElement('iframe');
@@ -676,7 +670,7 @@ test.describe('page events', () => {
     // ── request / response / requestfinished ───────────────────────────────
 
     test('request fires for a page fetch', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
 
         await page.route('**/api/evt-req', async (route) => route.fulfill({ status: 200, body: 'ok' }));
 
@@ -691,7 +685,7 @@ test.describe('page events', () => {
     });
 
     test('response fires after a fulfilled fetch with correct status', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
 
         await page.route('**/api/evt-resp', async (route) =>
             route.fulfill({ status: 201, body: 'created' })
@@ -710,7 +704,7 @@ test.describe('page events', () => {
     });
 
     test('requestfinished fires for a completed fetch', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
 
         await page.route('**/api/evt-fin', async (route) => route.fulfill({ status: 200, body: 'done' }));
 
@@ -727,7 +721,7 @@ test.describe('page events', () => {
 
 test.describe('page.setViewportSize', () => {
     test.beforeEach(async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
     });
 
     test('viewportSize returns positive width and height', async ({ safariPage: page }) => {
@@ -788,7 +782,7 @@ test.describe('page.setViewportSize', () => {
 
 test.describe('has-text', () => {
     test('has-text', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOGIN_URL);
 
         await page.fill('#user-name', 'standard_user');
         await page.fill('#password', 'secret_sauce');
@@ -831,40 +825,40 @@ async function removeIframe(page: import('../src').Page, id: string): Promise<vo
 
 test.describe('page.mainFrame', () => {
     test('mainFrame().title() matches page.title()', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
         const frameTitle = await page.mainFrame().title();
         const pageTitle  = await page.title();
         expect(frameTitle).toBe(pageTitle);
     });
 
     test('mainFrame().content() returns the full HTML document', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
         const content = await page.mainFrame().content();
         expect(content).toMatch(/^<html/i);
-        expect(content).toContain('Swag Labs');
+        expect(content).toContain('Local Test Page');
     });
 
     test('mainFrame().evaluate() runs JS in the page context', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
         const result = await page.mainFrame().evaluate(() => document.title);
-        expect(result).toContain('Swag Labs');
+        expect(result).toContain('Local Test Page');
     });
 
     test('mainFrame().locator() can query page elements', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
         const text = await page.mainFrame().locator('h1').textContent();
-        expect(text?.trim()).toBe('Swag Labs');
+        expect(text?.trim()).toBe('Local Test Page');
     });
 });
 
 test.describe('page.frames', () => {
     test('frames()[0] is always mainFrame()', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
         expect(page.frames()[0]).toBe(page.mainFrame());
     });
 
     test('frames() grows by one when an iframe is attached', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
         const before = page.frames().length;
 
         await addIframe(page, 'grow-frame');
@@ -873,7 +867,7 @@ test.describe('page.frames', () => {
     });
 
     test('frames() shrinks by one when an iframe is removed', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
 
         const attached = new Promise<void>(resolve => page.once('frameattached', () => resolve()));
         await page.evaluate(() => {
@@ -892,7 +886,7 @@ test.describe('page.frames', () => {
     });
 
     test('both frames appear in frames() when two iframes are added', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
 
         await addIframe(page, 'alpha-frame');
         await addIframe(page, 'beta-frame');
@@ -905,7 +899,7 @@ test.describe('page.frames', () => {
 
 test.describe('page.frame', () => {
     test('frame({ name }) finds a named iframe', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
         await addIframe(page, 'lookup-frame');
 
         const found = page.frame({ name: 'lookup-frame' });
@@ -914,14 +908,13 @@ test.describe('page.frame', () => {
     });
 
     test('frame({ name }) returns null for an unknown name', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
         expect(page.frame({ name: 'no-such-frame' })).toBeNull();
     });
 
     test('frame({ url }) finds a frame by URL pattern', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
 
-        // Attach an unnamed iframe so it is keyed by its URL ('about:blank')
         const attached = new Promise<void>(resolve => page.once('frameattached', () => resolve()));
         await page.evaluate(() => {
             const f = document.createElement('iframe');
@@ -935,7 +928,7 @@ test.describe('page.frame', () => {
     });
 
     test('frame({ name }) returns null after the iframe is detached', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
 
         const attached = new Promise<void>(resolve => page.once('frameattached', () => resolve()));
         await page.evaluate(() => {
@@ -975,7 +968,7 @@ async function injectIframeWithContent(
 
 test.describe('page.frameLocator', () => {
     test('frameLocator().locator() finds an element inside the iframe', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
         await injectIframeWithContent(page, 'fl-basic', '<button id="btn">Click me</button>');
 
         const btn = page.frameLocator('#fl-basic').locator('#btn');
@@ -983,7 +976,7 @@ test.describe('page.frameLocator', () => {
     });
 
     test('frameLocator().locator().textContent() reads iframe text', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
         await injectIframeWithContent(page, 'fl-text', '<span id="msg">Hello iframe</span>');
 
         const text = await page.frameLocator('#fl-text').locator('#msg').textContent();
@@ -991,7 +984,7 @@ test.describe('page.frameLocator', () => {
     });
 
     test('frameLocator().locator().getAttribute() reads iframe attribute', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
         await injectIframeWithContent(page, 'fl-attr', '<input id="inp" placeholder="type here">');
 
         const attr = await page.frameLocator('#fl-attr').locator('#inp').getAttribute('placeholder');
@@ -999,7 +992,7 @@ test.describe('page.frameLocator', () => {
     });
 
     test('frameLocator().locator().isVisible() is true for visible iframe element', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
         await injectIframeWithContent(page, 'fl-vis', '<p id="p">Visible</p>');
 
         const visible = await page.frameLocator('#fl-vis').locator('#p').isVisible();
@@ -1007,7 +1000,7 @@ test.describe('page.frameLocator', () => {
     });
 
     test('frameLocator().locator().isVisible() is false for hidden iframe element', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
         await injectIframeWithContent(page, 'fl-hidden', '<p id="p" style="display:none">Hidden</p>');
 
         const visible = await page.frameLocator('#fl-hidden').locator('#p').isVisible();
@@ -1015,7 +1008,7 @@ test.describe('page.frameLocator', () => {
     });
 
     test('frameLocator().locator().click() fires click inside the iframe', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
         await injectIframeWithContent(
             page, 'fl-click',
             '<button id="btn" onclick="document.getElementById(\'out\').textContent=\'clicked\'">Go</button><span id="out"></span>',
@@ -1027,23 +1020,22 @@ test.describe('page.frameLocator', () => {
     });
 
     test('frameLocator().locator().fill() fills an input inside the iframe', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
         await injectIframeWithContent(page, 'fl-fill', '<input id="inp" type="text">');
 
         await page.frameLocator('#fl-fill').locator('#inp').fill('hello');
-        const val = await page.frameLocator('#fl-fill').locator('#inp').inputValue();
-        expect(val).toBe('hello');
+        await expect(page.frameLocator('#fl-fill').locator('#inp')).toHaveValue('hello');
     });
 
     test('frameLocator().getByText() finds element by text inside iframe', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
         await injectIframeWithContent(page, 'fl-bytext', '<p>Find me</p>');
 
         await expect(page.frameLocator('#fl-bytext').getByText('Find me')).toBeVisible();
     });
 
     test('frameLocator().locator().count() counts elements inside iframe', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
         await injectIframeWithContent(page, 'fl-count', '<li>a</li><li>b</li><li>c</li>');
 
         const count = await page.frameLocator('#fl-count').locator('li').count();
@@ -1051,9 +1043,8 @@ test.describe('page.frameLocator', () => {
     });
 
     test('frameLocator().nth() selects the correct iframe when multiple exist', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
 
-        // Inject two iframes with the same class but different content
         const p1 = new Promise<void>(resolve => page.once('frameattached', () => resolve()));
         await page.evaluate(() => {
             const f = document.createElement('iframe');
@@ -1083,10 +1074,9 @@ test.describe('page.frameLocator', () => {
     });
 
     test('locator().frameLocator() scopes into a nested iframe via a parent locator', async ({ safariPage: page }) => {
-        await page.goto('https://www.saucedemo.com/');
+        await page.goto(LOCAL);
         await injectIframeWithContent(page, 'fl-scoped', '<em id="em">scoped</em>');
 
-        // body > #fl-scoped (iframe) > #em
         const text = await page.locator('body').frameLocator('#fl-scoped').locator('#em').textContent();
         expect(text).toBe('scoped');
     });

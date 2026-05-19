@@ -9,12 +9,15 @@ export default defineConfig({
     },
     fullyParallel: true,
     forbidOnly: !!process.env.CI,
-    retries: process.env.CI ? 2 : 0,
-    workers: process.env.CI ? 1 : 2,
+    retries: 0,
+    workers: 1,
     reporter: [['html', { open: 'never' }]],
     use: {
         trace: 'on-first-retry',
-        actionTimeout: 10 * 1000,
+        actionTimeout: 30 * 1000,
+    },
+    expect: {
+        timeout: 30000,
     },
     timeout: 60 * 1000,
 

@@ -1,5 +1,9 @@
 import { test, expect } from './fixtures';
 
+const LOCAL       = 'http://localhost:8000/index.html';
+const SECOND_PAGE = 'http://localhost:8000/secondPage.html';
+const POPUP_PAGE  = 'http://localhost:8000/popup-page.html';
+
 test.describe('browser.newContext / multi-page', () => {
     test('newContext returns a BrowserContext with newPage', async ({ safariBrowser }) => {
         const ctx = await safariBrowser.newContext();
@@ -23,12 +27,26 @@ test.describe('browser.newContext / multi-page', () => {
         const page1 = await ctx.newPage();
         const page2 = await ctx.newPage();
 
-        await page1.goto('https://example.com/');
-        await page2.goto('https://example.com/');
+        await page1.goto(LOCAL);
+        await page2.goto(SECOND_PAGE);
 
         expect(ctx.pages()).toHaveLength(2);
         expect(safariBrowser.pages()).toContain(page1);
         expect(safariBrowser.pages()).toContain(page2);
+
+        await ctx.close();
+    });
+
+    test('two pages load independent content', async ({ safariBrowser }) => {
+        const ctx = await safariBrowser.newContext();
+        const page1 = await ctx.newPage();
+        const page2 = await ctx.newPage();
+
+        await page1.goto(LOCAL);
+        await page2.goto(SECOND_PAGE);
+
+        expect(await page1.title()).toBe('Local Test Page');
+        expect(await page2.title()).toBe('Local Second Test Page');
 
         await ctx.close();
     });
@@ -92,13 +110,46 @@ test.describe('browser.newContext / multi-page', () => {
         expect(page2.isClosed()).toBe(true);
     });
 
-    test('open a new page in the context', async ({ safariPage }) => {
-        await safariPage.goto('http://localhost:8000/index.html');
+    test('popup-page.html opens a second page via window.open', async ({ safariPage }) => {
+        await safariPage.goto(POPUP_PAGE);
         await expect.poll(() => safariPage.context().pages()).toHaveLength(2);
         const pages = safariPage.context().pages();
         const page2 = pages[1];
-        await page2.waitForLoadState();
-        expect(await page2.url()).toBe('http://localhost:8000/secondPage.html');
+        expect(await page2.url()).toBe(SECOND_PAGE);
         expect(await page2.title()).toBe('Local Second Test Page');
+    });
+
+    test('waitForEvent popup resolves with the navigated page', async ({ safariPage }) => {
+        const [popup] = await Promise.all([
+            safariPage.waitForEvent('popup'),
+            safariPage.goto(POPUP_PAGE),
+        ]);
+        expect(await popup.url()).toBe(SECOND_PAGE);
+        expect(await popup.title()).toBe('Local Second Test Page');
+    });
+
+    test('context emits page event when window.open fires', async ({ safariPage }) => {
+        const [newPage] = await Promise.all([
+            safariPage.context().waitForEvent('page'),
+            safariPage.goto(POPUP_PAGE),
+        ]);
+        expect(newPage).toBeTruthy();
+        expect(await newPage.url()).toBe(SECOND_PAGE);
+    });
+
+    test('navigating two pages independently does not affect each other', async ({ safariBrowser }) => {
+        const ctx = await safariBrowser.newContext();
+        const page1 = await ctx.newPage();
+        const page2 = await ctx.newPage();
+
+        await page1.goto(LOCAL);
+        await page2.goto(LOCAL);
+
+        await page1.goto(SECOND_PAGE);
+
+        expect(await page1.title()).toBe('Local Second Test Page');
+        expect(await page2.title()).toBe('Local Test Page');
+
+        await ctx.close();
     });
 });

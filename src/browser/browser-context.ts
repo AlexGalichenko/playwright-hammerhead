@@ -41,6 +41,7 @@ export class BrowserContext extends EventEmitter {
     private _geolocation: { latitude: number; longitude: number; accuracy?: number } | null = null;
     private _offline = false;
     private _contextRoutes: ContextRoute[] = [];
+    private _pendingCookies: Cookie[] = [];
 
     constructor(pageFactory: PageFactory) {
         super();
@@ -61,26 +62,34 @@ export class BrowserContext extends EventEmitter {
         return page;
     }
 
-    _registerPage(page: Page): void {
+    _registerPage(page: Page, emitPageEvent = true): void {
         if (this._pages.includes(page)) return;
         this._pages.push(page);
         // Apply sync context settings before any user navigation
         for (const script of this._initScripts) {
             page.session.addInitScript(script);
         }
+        const cookieScript = this._buildCookieInitScript();
+        if (cookieScript) page.session.setCookieInitScript(cookieScript);
         if (this._defaultTimeout !== null) page.setDefaultTimeout(this._defaultTimeout);
         if (this._defaultNavigationTimeout !== null) page.setDefaultNavigationTimeout(this._defaultNavigationTimeout);
         void this._applyAsyncSettingsToPage(page);
         page.once('close', () => {
             this._pages = this._pages.filter(p => p !== page);
         });
-        page.on('popup', ({ url }: { url: string; target: string }) => {
+        (page as unknown as EventEmitter).on('_popupRequest', ({ url }: { url: string; target: string }) => {
             if (!url) return;
-            this.newPage()
-                .then(async newPage => { await newPage.goto(url).catch(() => {}); })
+            const opener = page;
+            this._pageFactory(this)
+                .then(async newPage => {
+                    this._registerPage(newPage, false);
+                    await newPage.goto(url).catch(() => {});
+                    opener.emit('popup', newPage);
+                    this.emit('page', newPage);
+                })
                 .catch(() => {});
         });
-        this.emit('page', page);
+        if (emitPageEvent) this.emit('page', page);
     }
 
     private async _applyAsyncSettingsToPage(page: Page): Promise<void> {
@@ -121,6 +130,19 @@ export class BrowserContext extends EventEmitter {
 
     // ── Cookie / storage helpers ─────────────────────────────────────────────
 
+    private _buildCookieInitScript(): string | null {
+        if (this._pendingCookies.length === 0) return null;
+        return this._pendingCookies.map(c => {
+            const parts = [`${encodeURIComponent(c.name)}=${encodeURIComponent(c.value)}`];
+            if (c.path) parts.push(`path=${c.path}`);
+            if (c.domain) parts.push(`domain=${c.domain}`);
+            if (c.expires !== undefined) parts.push(`expires=${new Date(c.expires * 1000).toUTCString()}`);
+            if (c.secure) parts.push('secure');
+            if (c.sameSite) parts.push(`samesite=${c.sameSite}`);
+            return `document.cookie = ${JSON.stringify(parts.join('; '))};`;
+        }).join('\n');
+    }
+
     private _activeSession(): BridgeSession | null {
         for (const p of this._pages) {
             if (!p.isClosed()) return (p as unknown as { session: BridgeSession }).session;
@@ -151,6 +173,10 @@ export class BrowserContext extends EventEmitter {
     }
 
     async clearCookies(): Promise<void> {
+        this._pendingCookies = [];
+        for (const p of this._pages) {
+            if (!p.isClosed()) p.session.setCookieInitScript(null);
+        }
         const session = this._activeSession();
         if (!session) return;
         await session.sendCommand({
@@ -165,9 +191,14 @@ export class BrowserContext extends EventEmitter {
     }
 
     async addCookies(cookies: Cookie[]): Promise<void> {
+        this._pendingCookies.push(...cookies);
+        const cookieScript = this._buildCookieInitScript();
         const activeSessions = this._pages
             .filter(p => !p.isClosed())
-            .map(p => (p as unknown as { session: BridgeSession }).session);
+            .map(p => p.session);
+        for (const session of activeSessions) {
+            session.setCookieInitScript(cookieScript);
+        }
         if (activeSessions.length === 0) return;
         for (const c of cookies) {
             const parts = [`${encodeURIComponent(c.name)}=${encodeURIComponent(c.value)}`];
@@ -476,6 +507,7 @@ export class BrowserContext extends EventEmitter {
         if (this._closed) return;
         this._closed = true;
         await Promise.all(this._pages.map(p => p.close().catch(() => {})));
+        this.emit('close');
         this.removeAllListeners();
     }
 }

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Shop - Checkout</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; max-width: 500px; }
+    h1 { color: #132322; }
+    input { display: block; width: 100%; padding: 8px; margin: 8px 0; box-sizing: border-box; border: 1px solid #ccc; }
+    input.error-field { border-color: #e2231a; }
+    button { padding: 10px 20px; cursor: pointer; border: 2px solid #3ddc91; background: white; font-weight: bold; margin-right: 10px; }
+    [data-test="continue"] { background: #3ddc91; border-color: #3ddc91; }
+    [data-test="error"] { background: #e2231a1a; border: 1px solid #e2231a; color: #e2231a; padding: 10px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Checkout: Your Information</h1>
+  <input type="text" data-test="firstName" placeholder="First Name" id="firstName">
+  <input type="text" data-test="lastName"  placeholder="Last Name"  id="lastName">
+  <input type="text" data-test="postalCode" placeholder="Zip/Postal Code" id="postalCode">
+  <div data-test="error" id="error-msg" style="display:none"></div>
+  <div style="margin-top:16px">
+    <button data-test="cancel" onclick="history.back()">Cancel</button>
+    <button data-test="continue" id="continue-btn">Continue</button>
+  </div>
+
+  <script>
+    document.getElementById('continue-btn').addEventListener('click', function() {
+      var first = document.getElementById('firstName').value.trim();
+      var last  = document.getElementById('lastName').value.trim();
+      var zip   = document.getElementById('postalCode').value.trim();
+      var errEl = document.getElementById('error-msg');
+      errEl.style.display = 'none';
+
+      if (!first) {
+        errEl.textContent = 'Error: First Name is required';
+        errEl.style.display = 'block';
+        return;
+      }
+      if (!last) {
+        errEl.textContent = 'Error: Last Name is required';
+        errEl.style.display = 'block';
+        return;
+      }
+      if (!zip) {
+        errEl.textContent = 'Error: Postal Code is required';
+        errEl.style.display = 'block';
+        return;
+      }
+
+      sessionStorage.setItem('checkout', JSON.stringify({ first: first, last: last, zip: zip }));
+      window.location.href = 'http://localhost:8000/checkout-overview.html';
+    });
+  </script>
+</body>
+</html>
