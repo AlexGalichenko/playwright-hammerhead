@@ -1,6 +1,4 @@
 
-export default executeCommand.toString() + '\n\n';
-
 function executeCommand(cmd) {
     function simulateKeyPress(cmd) {
         const target = cmd.target || (
@@ -381,10 +379,9 @@ function executeCommand(cmd) {
             return;
         }
 
-        // Native activation fallback
-        if (typeof el.click === 'function') {
-            el.click();
-        }
+        // The click event was already dispatched in simulateClick above.
+        // Calling el.click() here would fire a second click event, causing
+        // JS handlers (e.g. delete buttons) to run twice.
     }
 
     try {
@@ -790,3 +787,5 @@ function executeCommand(cmd) {
         return Promise.reject(e);
     }
 }
+
+export default executeCommand.toString();
