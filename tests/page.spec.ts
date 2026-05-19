@@ -839,7 +839,7 @@ test.describe('page.keyboard', () => {
         await page.goto(LOCAL);
         await page.setContent('<html><body><input id="inp" type="text"></body></html>');
         await page.focus('#inp');
-        await page.keyboard.type('hello');
+        await page.keyboard.type('hello', { delay: 50 });
         expect(await page.inputValue('#inp')).toBe('hello');
     });
 
