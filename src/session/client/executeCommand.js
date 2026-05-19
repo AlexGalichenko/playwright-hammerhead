@@ -3,13 +3,14 @@ export default executeCommand.toString() + '\n\n';
 
 function executeCommand(cmd) {
     function simulateKeyPress(cmd) {
-        const target =
+        const target = cmd.target || (
             document.activeElement &&
                 document.activeElement !== document.body
                 ? document.activeElement
                 : document.querySelector(
                     'input, textarea, [contenteditable="true"]'
-                ) || document.body;
+                ) || document.body
+        );
 
         const key = cmd.key;
         const code = cmd.code || key;
@@ -116,10 +117,17 @@ function executeCommand(cmd) {
             target instanceof HTMLInputElement ||
             target instanceof HTMLTextAreaElement
         ) {
-            const start = target.selectionStart ?? target.value.length;
-            const end = target.selectionEnd ?? start;
-
-            target.setRangeText(text, start, end, 'end');
+            try {
+                const start = target.selectionStart ?? target.value.length;
+                const end = target.selectionEnd ?? start;
+                target.setRangeText(text, start, end, 'end');
+            } catch (_e) {
+                // Input types like date/number/color don't support selection APIs in Safari.
+                // Fall back to appending via the native value setter.
+                const nativeSetter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(target), 'value');
+                if (nativeSetter && nativeSetter.set) { nativeSetter.set.call(target, target.value + text); }
+                else { target.value = target.value + text; }
+            }
             return;
         }
 
@@ -422,10 +430,22 @@ function executeCommand(cmd) {
                 return waitForElements(cmd.steps, cmd.timeout).then(async function (els) {
                     var el = els[0];
                     el.focus();
+                    // Input types like date/number/color don't support selectionStart in Safari —
+                    // char-by-char key simulation would throw. Set the value directly instead.
+                    if ((el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) && el.selectionStart === null) {
+                        var nativeSetter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value');
+                        if (nativeSetter && nativeSetter.set) { nativeSetter.set.call(el, cmd.value); }
+                        else { el.value = cmd.value; }
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                        return null;
+                    }
                     for (var i = 0; i < cmd.value.length; i++) {
+                        if (document.activeElement !== el) el.focus({ preventScroll: true });
                         await simulateKeyPress({
                             key: cmd.value[i],
-                            code: cmd.value[i]
+                            code: cmd.value[i],
+                            target: el
                         });
                         await delay(30);
                     }
