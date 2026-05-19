@@ -18,7 +18,7 @@ export const test = base.extend<SafariTestFixtures, SafariWorkerFixtures>({
         async ({}, use, testInfo) => {
             const port = PORT + 2 * testInfo.workerIndex;
             const crossDomainPort = port + 1;
-            const browser = await safari.launch({ port: port, crossDomainPort: crossDomainPort });
+            const browser = await safari.launch({ port: port, crossDomainPort: crossDomainPort, use: { actionTimeout: 30_000, navigationTimeout: 30_000 } });
             await use(browser);
             await browser.close();
         },

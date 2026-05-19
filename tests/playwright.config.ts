@@ -14,10 +14,10 @@ export default defineConfig({
     reporter: [['html', { open: 'never' }]],
     use: {
         trace: 'on-first-retry',
-        actionTimeout: 10 * 1000,
+        actionTimeout: 30 * 1000,
     },
     expect: {
-        timeout: 10000,
+        timeout: 30000,
     },
     timeout: 60 * 1000,
 

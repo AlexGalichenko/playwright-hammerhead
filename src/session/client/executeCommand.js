@@ -168,6 +168,217 @@ function executeCommand(cmd) {
         return new Promise((resolve) => setTimeout(resolve, ms));
     }
 
+    function simulateClick(el, options = {}) {
+        if (!el || !el.isConnected) {
+            throw new Error('Element is not attached to DOM');
+        }
+
+        // Disabled controls do not receive clicks
+        if (
+            el instanceof HTMLElement &&
+            ('disabled' in el && el.disabled)
+        ) {
+            return { prevented: true, reason: 'disabled' };
+        }
+
+        const rect = el.getBoundingClientRect();
+
+        const x = options.clientX ?? rect.left + rect.width / 2;
+        const y = options.clientY ?? rect.top + rect.height / 2;
+
+        const button = options.button ?? 0;
+
+        const buttonsMap = {
+            0: 1, // left
+            1: 4, // middle
+            2: 2, // right
+        };
+
+        const base = {
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+
+            clientX: x,
+            clientY: y,
+            screenX: window.screenX + x,
+            screenY: window.screenY + y,
+
+            button,
+            buttons: buttonsMap[button] ?? 1,
+
+            ctrlKey: !!options.ctrlKey,
+            shiftKey: !!options.shiftKey,
+            altKey: !!options.altKey,
+            metaKey: !!options.metaKey,
+
+            relatedTarget: null,
+        };
+
+        const pointerBase = {
+            ...base,
+            pointerId: 1,
+            pointerType: options.pointerType ?? 'mouse',
+            isPrimary: true,
+            pressure: button === 0 ? 0.5 : 0,
+        };
+
+        const dispatch = (target, type, EventType, init) => {
+            const event = new EventType(type, init);
+            return target.dispatchEvent(event);
+        };
+
+        // Hover sequence
+        dispatch(el, 'pointerover', PointerEvent, pointerBase);
+        dispatch(el, 'mouseover', MouseEvent, base);
+
+        dispatch(el, 'pointerenter', PointerEvent, {
+            ...pointerBase,
+            bubbles: false,
+        });
+
+        dispatch(el, 'mouseenter', MouseEvent, {
+            ...base,
+            bubbles: false,
+        });
+
+        dispatch(el, 'pointermove', PointerEvent, pointerBase);
+        dispatch(el, 'mousemove', MouseEvent, base);
+
+        // Down
+        const pointerDownAllowed = dispatch(
+            el,
+            'pointerdown',
+            PointerEvent,
+            pointerBase
+        );
+
+        const mouseDownAllowed = dispatch(
+            el,
+            'mousedown',
+            MouseEvent,
+            base
+        );
+
+        // Browser focus behavior
+        if (
+            pointerDownAllowed &&
+            mouseDownAllowed &&
+            isFocusable(el)
+        ) {
+            el.focus({ preventScroll: true });
+        }
+
+        const upMouse = {
+            ...base,
+            buttons: 0,
+        };
+
+        const upPointer = {
+            ...pointerBase,
+            buttons: 0,
+            pressure: 0,
+        };
+
+        // Up
+        dispatch(el, 'pointerup', PointerEvent, upPointer);
+        dispatch(el, 'mouseup', MouseEvent, upMouse);
+
+        // Primary click
+        if (button === 0) {
+            const clickAllowed = dispatch(
+                el,
+                'click',
+                MouseEvent,
+                {
+                    ...upMouse,
+                    detail: options.detail ?? 1,
+                }
+            );
+
+            if (clickAllowed) {
+                performDefaultAction(el);
+            }
+
+            // Double click support
+            if ((options.detail ?? 1) === 2) {
+                dispatch(el, 'dblclick', MouseEvent, {
+                    ...upMouse,
+                    detail: 2,
+                });
+            }
+        }
+
+        // Middle click
+        if (button === 1) {
+            dispatch(el, 'auxclick', MouseEvent, upMouse);
+        }
+
+        // Right click
+        if (button === 2) {
+            dispatch(el, 'contextmenu', MouseEvent, upMouse);
+        }
+
+        return {
+            element: el,
+            clientX: x,
+            clientY: y,
+        };
+    }
+
+    function isFocusable(el) {
+        return (
+            el.tabIndex >= 0 ||
+            /^(INPUT|BUTTON|SELECT|TEXTAREA|A)$/.test(
+                el.tagName
+            ) ||
+            el.isContentEditable
+        );
+    }
+
+    function performDefaultAction(el) {
+        // Label delegation
+        if (el instanceof HTMLLabelElement && el.control) {
+            el.control.click();
+            return;
+        }
+
+        // Checkbox toggle
+        if (
+            el instanceof HTMLInputElement &&
+            el.type === 'checkbox'
+        ) {
+            el.checked = !el.checked;
+            el.dispatchEvent(
+                new Event('input', { bubbles: true })
+            );
+            el.dispatchEvent(
+                new Event('change', { bubbles: true })
+            );
+            return;
+        }
+
+        // Radio selection
+        if (
+            el instanceof HTMLInputElement &&
+            el.type === 'radio'
+        ) {
+            el.checked = true;
+            el.dispatchEvent(
+                new Event('input', { bubbles: true })
+            );
+            el.dispatchEvent(
+                new Event('change', { bubbles: true })
+            );
+            return;
+        }
+
+        // Native activation fallback
+        if (typeof el.click === 'function') {
+            el.click();
+        }
+    }
+
     try {
         switch (cmd.type) {
 
@@ -178,22 +389,7 @@ function executeCommand(cmd) {
             // --- Single-element writes (step-based) ---
             case 'click':
                 return waitForElements(cmd.steps, cmd.timeout).then(function (els) {
-                    var el = els[0];
-                    var i = mouseInits(el);
-                    var up = Object.assign({}, i.m, { buttons: 0 });
-                    var pup = Object.assign({}, i.p, { buttons: 0 });
-                    el.dispatchEvent(new PointerEvent('pointerover', i.p));
-                    el.dispatchEvent(new MouseEvent('mouseover', i.m));
-                    el.dispatchEvent(new PointerEvent('pointerenter', Object.assign({}, i.p, { bubbles: false })));
-                    el.dispatchEvent(new MouseEvent('mouseenter', Object.assign({}, i.m, { bubbles: false })));
-                    el.dispatchEvent(new PointerEvent('pointermove', i.p));
-                    el.dispatchEvent(new MouseEvent('mousemove', i.m));
-                    el.dispatchEvent(new PointerEvent('pointerdown', i.p));
-                    el.dispatchEvent(new MouseEvent('mousedown', i.m));
-                    el.focus();
-                    el.dispatchEvent(new PointerEvent('pointerup', pup));
-                    el.dispatchEvent(new MouseEvent('mouseup', up));
-                    el.dispatchEvent(new MouseEvent('click', Object.assign({}, up, { detail: 1 })));
+                    simulateClick(els[0]);
                     return null;
                 });
             case 'dblclick':

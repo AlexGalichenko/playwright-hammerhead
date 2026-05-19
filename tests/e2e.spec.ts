@@ -67,3 +67,24 @@ test.describe('Catalog', () => {
         await expect(page.locator('#view-order-complete')).toBeVisible();
     });
 });
+
+test.describe('Keyboard interactions', () => {
+    test('end 2 end', async ({ safariPage: page }) => {
+        await page.goto('https://testauto.app/task-manager');
+        const addTaskButton = page.locator('.btn-add-task');
+        await addTaskButton.click();
+        const title = page.locator('#task-form-title');
+        await title.fill('Test Automation');
+        const description = page.locator('#task-form-description');
+        await description.fill('This is a test automation task.');
+        const staus = page.locator('#task-form-status');
+        await staus.selectOption('In Progress');
+        const radio = page.locator('input[type="radio"][value="LOW"]');
+        await radio.click();
+        const dateField = page.locator('#task-form-due-date');
+        await dateField.fill('2026-05-19');
+        const submitButton = page.locator('#task-form-submit');
+        await submitButton.click();
+        await expect(page.locator('.task-item')).toContainText('Test Automation');
+    });
+});

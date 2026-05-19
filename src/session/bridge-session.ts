@@ -626,7 +626,7 @@ export class BridgeSession extends Session {
     private _pollFn(): string {
         return `
     function signalReady() {
-        sendMsg('bridge_ready', {}, 5000).catch(function() {});
+        sendMsg('bridge_ready', {}, 5000).catch(function() { setTimeout(signalReady, 500); });
     }
 
     if (document.readyState === 'loading') {
@@ -754,6 +754,9 @@ export class BridgeSession extends Session {
         // (goto/reload/goBack/goForward), so any currently dispatched commands belong to the
         // old page and should be discarded rather than replayed on the new one.
         this._suppressRedispatch = true;
+        // Discard any unresolved deferred from a previous timed-out navigation so that
+        // a late-arriving bridge_ready from the old page cannot satisfy a new waitForReady.
+        this.readyDeferred = null;
     }
 
     async bridge_ready(_msg: ServiceMsg): Promise<null> {
