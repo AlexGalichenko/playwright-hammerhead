@@ -62,7 +62,7 @@ export class BrowserContext extends EventEmitter {
         return page;
     }
 
-    _registerPage(page: Page): void {
+    _registerPage(page: Page, emitPageEvent = true): void {
         if (this._pages.includes(page)) return;
         this._pages.push(page);
         // Apply sync context settings before any user navigation
@@ -77,13 +77,19 @@ export class BrowserContext extends EventEmitter {
         page.once('close', () => {
             this._pages = this._pages.filter(p => p !== page);
         });
-        page.on('popup', ({ url }: { url: string; target: string }) => {
+        (page as unknown as EventEmitter).on('_popupRequest', ({ url }: { url: string; target: string }) => {
             if (!url) return;
-            this.newPage()
-                .then(async newPage => { await newPage.goto(url).catch(() => {}); })
+            const opener = page;
+            this._pageFactory(this)
+                .then(async newPage => {
+                    this._registerPage(newPage, false);
+                    await newPage.goto(url).catch(() => {});
+                    opener.emit('popup', newPage);
+                    this.emit('page', newPage);
+                })
                 .catch(() => {});
         });
-        this.emit('page', page);
+        if (emitPageEvent) this.emit('page', page);
     }
 
     private async _applyAsyncSettingsToPage(page: Page): Promise<void> {

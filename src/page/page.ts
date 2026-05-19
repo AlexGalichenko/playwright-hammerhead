@@ -131,7 +131,7 @@ export class Page extends EventEmitter {
     on(event: 'framenavigated', listener: (frame: Frame) => void): this;
     on(event: 'load', listener: (page: Page) => void): this;
     on(event: 'pageerror', listener: (error: Error) => void): this;
-    on(event: 'popup', listener: (info: { url: string; target: string }) => void): this;
+    on(event: 'popup', listener: (page: Page) => void): this;
     on(event: 'request', listener: (request: Request) => void): this;
     on(event: 'requestfailed', listener: (request: Request) => void): this;
     on(event: 'requestfinished', listener: (request: Request) => void): this;
@@ -156,7 +156,7 @@ export class Page extends EventEmitter {
     once(event: 'framenavigated', listener: (frame: Frame) => void): this;
     once(event: 'load', listener: (page: Page) => void): this;
     once(event: 'pageerror', listener: (error: Error) => void): this;
-    once(event: 'popup', listener: (info: { url: string; target: string }) => void): this;
+    once(event: 'popup', listener: (page: Page) => void): this;
     once(event: 'request', listener: (request: Request) => void): this;
     once(event: 'requestfailed', listener: (request: Request) => void): this;
     once(event: 'requestfinished', listener: (request: Request) => void): this;
@@ -236,7 +236,7 @@ export class Page extends EventEmitter {
                 this.emit('load', this);
                 break;
             case 'popup':
-                this.emit('popup', { url: data['url'] as string, target: data['target'] as string });
+                this.emit('_popupRequest', { url: data['url'] as string, target: data['target'] as string });
                 break;
             case 'worker':
                 this.emit('worker', new WorkerEvent(data['url'] as string));
@@ -693,6 +693,11 @@ export class Page extends EventEmitter {
         throw new Error(`Timeout ${timeout}ms waiting for URL: ${url}`);
     }
 
+    waitForEvent(event: 'popup', options?: { timeout?: number }): Promise<Page>;
+    waitForEvent(event: 'download', options?: { timeout?: number }): Promise<Download>;
+    waitForEvent(event: 'dialog', options?: { timeout?: number }): Promise<Dialog>;
+    waitForEvent(event: 'filechooser', options?: { timeout?: number }): Promise<FileChooser>;
+    waitForEvent(event: string, options?: { timeout?: number }): Promise<unknown>;
     async waitForEvent(event: string, options?: { timeout?: number }): Promise<unknown> {
         const timeout = options?.timeout ?? this.defaultTimeout;
         return new Promise((resolve, reject) => {

@@ -584,15 +584,16 @@ test.describe('page events', () => {
 
     // ── popup ──────────────────────────────────────────────────────────────
 
-    test('popup fires with url and target when window.open is called', async ({ safariPage: page }) => {
+    test('popup fires with a Page when window.open is called', async ({ safariPage: page }) => {
         await page.goto(LOCAL);
 
-        const popupPromise = new Promise<{ url: string; target: string }>(resolve => page.once('popup', resolve));
-        await page.evaluate(() => window.open('https://example.com', '_blank'));
-        const info = await popupPromise;
+        const [popup] = await Promise.all([
+            page.waitForEvent('popup'),
+            page.evaluate(() => window.open('http://localhost:8000/secondPage.html', '_blank')),
+        ]);
 
-        expect(info.url).toContain('example.com');
-        expect(info.target).toBe('_blank');
+        expect(popup).toBeTruthy();
+        expect(popup.url()).toContain('secondPage');
     });
 
     // ── websocket ──────────────────────────────────────────────────────────

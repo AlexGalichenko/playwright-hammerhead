@@ -115,9 +115,26 @@ test.describe('browser.newContext / multi-page', () => {
         await expect.poll(() => safariPage.context().pages()).toHaveLength(2);
         const pages = safariPage.context().pages();
         const page2 = pages[1];
-        await page2.waitForLoadState();
         expect(await page2.url()).toBe(SECOND_PAGE);
         expect(await page2.title()).toBe('Local Second Test Page');
+    });
+
+    test('waitForEvent popup resolves with the navigated page', async ({ safariPage }) => {
+        const [popup] = await Promise.all([
+            safariPage.waitForEvent('popup'),
+            safariPage.goto(POPUP_PAGE),
+        ]);
+        expect(await popup.url()).toBe(SECOND_PAGE);
+        expect(await popup.title()).toBe('Local Second Test Page');
+    });
+
+    test('context emits page event when window.open fires', async ({ safariPage }) => {
+        const [newPage] = await Promise.all([
+            safariPage.context().waitForEvent('page'),
+            safariPage.goto(POPUP_PAGE),
+        ]);
+        expect(newPage).toBeTruthy();
+        expect(await newPage.url()).toBe(SECOND_PAGE);
     });
 
     test('navigating two pages independently does not affect each other', async ({ safariBrowser }) => {

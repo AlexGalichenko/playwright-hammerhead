@@ -133,3 +133,32 @@ test.describe('testauto.app', () => {
         await expect(page.locator(`tr:has-text("${name}")`)).not.toBeVisible();
     });
 });
+
+test.describe('QA Practice', () => {
+
+    test('frameLocator', async ({ safariPage: page }) => {
+        await page.goto('https://qa-practice.razvanvancea.ro/iframe.html');
+        const frame = page.frameLocator('#iframe-checkboxes');
+        const frameButton = frame.locator('#learn-more');
+        await frameButton.click();
+        await expect(frame.locator('#show-text')).toBeVisible();
+    });
+
+    test('new tab', async ({ safariPage: page }) => {
+        await page.goto('https://qa-practice.razvanvancea.ro/tab.html');
+        const newTabButton = page.locator('#newTabBtn');
+        const pagePromise = page.context().waitForEvent('page', { timeout: 5000 });
+        await newTabButton.click();
+        const page2 = await pagePromise;
+        await expect(page2.locator('h2')).toHaveText('Table Example');
+    });
+
+    test('new window', async ({ safariPage: page }) => {
+        await page.goto('https://qa-practice.razvanvancea.ro/window.html');
+        const newTabButton = page.locator('#newWindowBtn');
+        const pagePromise = page.context().waitForEvent('page', { timeout: 5000 });
+        await newTabButton.click();
+        const page2 = await pagePromise;
+        await expect(page2.locator('h2')).toHaveText('Table Example');
+    });
+});
