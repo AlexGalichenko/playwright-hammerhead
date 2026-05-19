@@ -1,7 +1,7 @@
 {
   "name": "playwright-hammerhead",
-  "version": "1.0.0",
-  "description": "",
+  "version": "0.0.1",
+  "description": "Playwright-compatible API layer for Safari automation via testcafe-hammerhead proxy",
   "homepage": "https://github.com/AlexGalichenko/playwright-hammerhead#readme",
   "bugs": {
     "url": "https://github.com/AlexGalichenko/playwright-hammerhead/issues"
@@ -11,14 +11,20 @@
     "url": "git+https://github.com/AlexGalichenko/playwright-hammerhead.git"
   },
   "license": "ISC",
-  "author": "",
+  "author": "AlexGalichenko",
   "type": "commonjs",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc",
     "build:watch": "tsc --watch",
-    "debug": "playwright test --ui"
+    "prepare": "npm run build",
+    "debug": "playwright test --config tests/playwright.config.ts --ui",
+    "test": "playwright test --config tests/playwright.config.ts --project=e2e"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",

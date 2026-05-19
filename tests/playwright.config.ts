@@ -1,9 +1,9 @@
 import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
-    testDir: './tests',
+    testDir: '.',
     webServer: {
-        command: 'node tests/server.js',
+        command: 'node server.js',
         port: 8000,
         reuseExistingServer: !process.env.CI,
     },
@@ -23,6 +23,10 @@ export default defineConfig({
         {
             name: 'safari-hammerhead',
             testMatch: '**/*.spec.ts',
+        },
+        {
+            name: 'e2e',
+            testMatch: '**/checkout.spec.ts',
         },
     ],
 });
