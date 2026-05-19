@@ -69,11 +69,9 @@ test.describe('BrowserContext.clearCookies', () => {
 
 test.describe('BrowserContext.addCookies', () => {
     test('adds a single cookie that is readable afterwards', async ({ safariPage: page }) => {
-        await page.goto(LOCAL);
         await page.context().clearCookies();
-
         await page.context().addCookies([{ name: 'session', value: 'abc123' }]);
-
+        await page.goto(LOCAL);
         const cookies = await page.context().cookies();
         const found = cookies.find(c => c.name === 'session');
         expect(found).toBeTruthy();
@@ -81,14 +79,12 @@ test.describe('BrowserContext.addCookies', () => {
     });
 
     test('adds multiple cookies in one call', async ({ safariPage: page }) => {
-        await page.goto(LOCAL);
         await page.context().clearCookies();
-
         await page.context().addCookies([
             { name: 'c1', value: 'v1' },
             { name: 'c2', value: 'v2' },
         ]);
-
+        await page.goto(LOCAL);
         const cookies = await page.context().cookies();
         const names = cookies.map(c => c.name);
         expect(names).toContain('c1');
@@ -96,19 +92,16 @@ test.describe('BrowserContext.addCookies', () => {
     });
 
     test('cookie with path attribute is set', async ({ safariPage: page }) => {
-        await page.goto(LOCAL);
         await page.context().clearCookies();
-
         await page.context().addCookies([{ name: 'pathcookie', value: 'pv', path: '/' }]);
-
+        await page.goto(LOCAL);
         const cookies = await page.context().cookies();
         expect(cookies.find(c => c.name === 'pathcookie')).toBeTruthy();
     });
 
     test('cookie with expires attribute is accepted', async ({ safariPage: page }) => {
-        await page.goto(LOCAL);
         await page.context().clearCookies();
-
+        await page.goto(LOCAL);
         const future = Math.floor(Date.now() / 1000) + 3600;
         await page.context().addCookies([{ name: 'expcookie', value: 'ev', expires: future }]);
 
@@ -124,21 +117,17 @@ test.describe('BrowserContext.addCookies', () => {
     });
 
     test('cookie with sameSite attribute is accepted', async ({ safariPage: page }) => {
-        await page.goto(LOCAL);
         await page.context().clearCookies();
-
         await page.context().addCookies([{ name: 'sscookie', value: 'ssv', sameSite: 'Lax' }]);
-
+        await page.goto(LOCAL);
         const cookies = await page.context().cookies();
         expect(cookies.find(c => c.name === 'sscookie')).toBeTruthy();
     });
 
     test('does nothing when passed an empty array', async ({ safariPage: page }) => {
-        await page.goto(LOCAL);
         await page.context().clearCookies();
-
         await page.context().addCookies([]);
-
+        await page.goto(LOCAL);
         const cookies = await page.context().cookies();
         expect(cookies).toEqual([]);
     });
@@ -146,10 +135,9 @@ test.describe('BrowserContext.addCookies', () => {
 
 test.describe('BrowserContext.storageState', () => {
     test('returns cookies in the state', async ({ safariPage: page }) => {
-        await page.goto(LOCAL);
         await page.context().clearCookies();
         await page.context().addCookies([{ name: 'state_cookie', value: 'state_val' }]);
-
+        await page.goto(LOCAL);
         const state = await page.context().storageState();
 
         const found = state.cookies.find(c => c.name === 'state_cookie');

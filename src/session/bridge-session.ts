@@ -34,6 +34,7 @@ export class BridgeSession extends Session {
     private readyDeferred: Deferred<void> | null = null;
     private isReady = false;
     private _initScripts: string[] = [];
+    private _cookieInitScript: string | null = null;
     private _eventListener: ((event: string, data: unknown) => void) | null = null;
     private _exposedFunctions = new Map<string, (...args: unknown[]) => unknown>();
     private _exposedBindings = new Map<string, (source: Record<string, unknown>, ...args: unknown[]) => unknown>();
@@ -50,6 +51,10 @@ export class BridgeSession extends Session {
 
     addInitScript(script: string): void {
         this._initScripts.push(script);
+    }
+
+    setCookieInitScript(script: string | null): void {
+        this._cookieInitScript = script;
     }
 
     setEventListener(listener: (event: string, data: unknown) => void): void {
@@ -87,8 +92,11 @@ export class BridgeSession extends Session {
     async getPayloadScript(): Promise<string> {
         const sessionId = this.id;
         const messagingUrl = `http://localhost:${this.proxyPort}/messaging`;
-        const initBlock = this._initScripts.length > 0
-            ? this._initScripts.map(s => `try { (function(){ ${s} })(); } catch(e) { console.error('[initScript]', e); }`).join('\n') + '\n'
+        const allScripts = this._cookieInitScript
+            ? [this._cookieInitScript, ...this._initScripts]
+            : this._initScripts;
+        const initBlock = allScripts.length > 0
+            ? allScripts.map(s => `try { (function(){ ${s} })(); } catch(e) { console.error('[initScript]', e); }`).join('\n') + '\n'
             : '';
 
         const varInit = `    var SESSION_ID = '${sessionId}';\n    var MESSAGING_URL = '${messagingUrl}';`;

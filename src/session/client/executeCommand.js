@@ -64,9 +64,11 @@ function executeCommand(cmd) {
         }
 
         // 3. beforeinput/input + actual insertion
+        // Use tagName instead of instanceof to handle elements from iframe windows
+        var _elTag = (target.tagName || '').toUpperCase();
         const editable =
-            target instanceof HTMLInputElement ||
-            target instanceof HTMLTextAreaElement ||
+            _elTag === 'INPUT' ||
+            _elTag === 'TEXTAREA' ||
             target.isContentEditable;
 
         const shouldInsertText =
@@ -111,10 +113,9 @@ function executeCommand(cmd) {
     }
 
     function insertText(target, text) {
-        if (
-            target instanceof HTMLInputElement ||
-            target instanceof HTMLTextAreaElement
-        ) {
+        // Use tagName instead of instanceof to handle elements from iframe windows
+        var _tag = (target.tagName || '').toUpperCase();
+        if (_tag === 'INPUT' || _tag === 'TEXTAREA') {
             try {
                 const start = target.selectionStart ?? target.value.length;
                 const end = target.selectionEnd ?? start;
@@ -180,10 +181,7 @@ function executeCommand(cmd) {
         }
 
         // Disabled controls do not receive clicks
-        if (
-            el instanceof HTMLElement &&
-            ('disabled' in el && el.disabled)
-        ) {
+        if ('disabled' in el && el.disabled) {
             return { prevented: true, reason: 'disabled' };
         }
 
@@ -343,17 +341,16 @@ function executeCommand(cmd) {
     }
 
     function performDefaultAction(el) {
+        // Use tagName instead of instanceof to handle elements from iframe windows
+        var _tag = (el.tagName || '').toUpperCase();
         // Label delegation
-        if (el instanceof HTMLLabelElement && el.control) {
+        if (_tag === 'LABEL' && el.control) {
             el.control.click();
             return;
         }
 
         // Checkbox toggle
-        if (
-            el instanceof HTMLInputElement &&
-            el.type === 'checkbox'
-        ) {
+        if (_tag === 'INPUT' && el.type === 'checkbox') {
             el.checked = !el.checked;
             el.dispatchEvent(
                 new Event('input', { bubbles: true })
@@ -365,10 +362,7 @@ function executeCommand(cmd) {
         }
 
         // Radio selection
-        if (
-            el instanceof HTMLInputElement &&
-            el.type === 'radio'
-        ) {
+        if (_tag === 'INPUT' && el.type === 'radio') {
             el.checked = true;
             el.dispatchEvent(
                 new Event('input', { bubbles: true })
@@ -429,7 +423,9 @@ function executeCommand(cmd) {
                     el.focus();
                     // Input types like date/number/color don't support selectionStart in Safari —
                     // char-by-char key simulation would throw. Set the value directly instead.
-                    if ((el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) && el.selectionStart === null) {
+                    // Use tagName instead of instanceof to handle elements from iframe windows.
+                    var _fillTag = (el.tagName || '').toUpperCase();
+                    if ((_fillTag === 'INPUT' || _fillTag === 'TEXTAREA') && el.selectionStart === null) {
                         var nativeSetter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value');
                         if (nativeSetter && nativeSetter.set) { nativeSetter.set.call(el, cmd.value); }
                         else { el.value = cmd.value; }
@@ -438,7 +434,7 @@ function executeCommand(cmd) {
                         return null;
                     }
                     for (var i = 0; i < cmd.value.length; i++) {
-                        if (document.activeElement !== el) el.focus({ preventScroll: true });
+                        if (el.ownerDocument.activeElement !== el) el.focus({ preventScroll: true });
                         await simulateKeyPress({
                             key: cmd.value[i],
                             code: cmd.value[i],

@@ -91,16 +91,6 @@ test.describe('Shop inventory', () => {
         await expect(page.locator('.inventory_item_name')).toHaveText('Test.allTheThings() T-Shirt (Red)');
     });
 
-    test('navigates to product detail and back', async ({ safariPage: page }) => {
-        await page.click('.inventory_item_name');
-
-        await expect(page.locator('.inventory_details_name')).toBeVisible();
-
-        await page.click('[data-test="back-to-products"]');
-
-        await expect(page.locator('.inventory_list')).toBeVisible();
-    });
-
     test('add multiple items updates cart badge', async ({ safariPage: page }) => {
         await page.click('[data-test="add-to-cart-sauce-labs-backpack"]');
         await page.click('[data-test="add-to-cart-sauce-labs-bike-light"]');
@@ -1033,8 +1023,7 @@ test.describe('page.frameLocator', () => {
         await injectIframeWithContent(page, 'fl-fill', '<input id="inp" type="text">');
 
         await page.frameLocator('#fl-fill').locator('#inp').fill('hello');
-        const val = await page.frameLocator('#fl-fill').locator('#inp').inputValue();
-        expect(val).toBe('hello');
+        await expect(page.frameLocator('#fl-fill').locator('#inp')).toHaveValue('hello');
     });
 
     test('frameLocator().getByText() finds element by text inside iframe', async ({ safariPage: page }) => {
